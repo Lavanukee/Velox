@@ -1,0 +1,73 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "dialog:allow-open",
+    "dialog:default",
+    "shell:allow-open",
+    "fs:allow-read",
+    "fs:allow-write",
+    "fs:allow-read-dir",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
+    "fs:allow-rename",
+    "fs:allow-exists",
+    "fs:allow-copy-file",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "cmd": "python-x86_64-windows/python.exe",
+          "name": "python_script"
+        },
+        {
+          "cmd": "llama-server",
+          "name": "llama_server"
+        },
+        {
+          "cmd": "python-x86_64-windows/python.exe",
+          "args": ["scripts/download_datasets.py"],
+          "name": "download_datasets_script"
+        },
+        {
+          "cmd": "python-x86_64-windows/python.exe",
+          "args": ["scripts/data_collecter.py"],
+          "name": "data_collection_script"
+        },
+        {
+          "cmd": "python-x86_64-windows/python.exe",
+          "args": ["scripts/deduplication.py"],
+          "name": "deduplication_script"
+        },
+        {
+          "cmd": "python-x86_64-windows/python.exe",
+          "args": ["scripts/process_data.py"],
+          "name": "data_processing_script"
+        },
+        {
+          "cmd": "python-x86_64-windows/python.exe",
+          "args": ["scripts/trainer.py"],
+          "name": "trainer_script"
+        }
+      ]
+    }
+  ],
+  "configuration": {
+    "fs": {
+      "scope": [
+        "data/**",
+        "scripts/**",
+        "data/models/**",
+        "data/loras/**",
+        "../../data/**",
+        "$APPDATA/**",
+        "$RESOURCE/templates/*",
+        "../models_config.json"
+      ]
+    }
+  }
+}

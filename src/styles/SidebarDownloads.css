@@ -1,0 +1,234 @@
+/* styles/SidebarDownloads.css */
+
+.sidebar-downloads {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 8px 0;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, transparent 100%);
+}
+
+.sidebar-downloads-header {
+    padding: 12px 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.sidebar-downloads-header:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.downloads-header-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.downloads-collapsed-indicator {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #a1a1aa;
+}
+
+.download-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    background: linear-gradient(135deg, #a78bfa 0%, #7dd3fc 100%);
+    color: white;
+    font-size: 0.65rem;
+    font-weight: bold;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.downloads-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #c4b5fd;
+    flex: 1;
+}
+
+.downloads-toggle {
+    display: flex;
+    align-items: center;
+    color: #a1a1aa;
+}
+
+.sidebar-downloads-body {
+    padding: 8px 8px 12px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.downloads-empty {
+    text-align: center;
+    color: #7a7a8e;
+    font-size: 0.8rem;
+    padding: 16px 8px;
+    font-style: italic;
+}
+
+/* Download Item */
+.download-item {
+    background: rgba(167, 139, 250, 0.08);
+    border: 1px solid rgba(167, 139, 250, 0.2);
+    border-radius: 6px;
+    padding: 8px;
+    transition: all 0.2s;
+}
+
+.download-item:hover {
+    background: rgba(167, 139, 250, 0.12);
+    border-color: rgba(167, 139, 250, 0.3);
+}
+
+.download-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.download-item-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+
+.download-icon {
+    flex-shrink: 0;
+    color: #a1a1aa;
+}
+
+.download-icon.active {
+    color: #7dd3fc;
+    animation: spin 1s linear infinite;
+}
+
+.download-icon.completed {
+    color: #4caf50;
+}
+
+.download-icon.error {
+    color: #f44336;
+}
+
+.download-icon.cancelled {
+    color: #f59e0b;
+}
+
+.download-name {
+    flex: 1;
+    font-size: 0.8rem;
+    color: #e0e0e0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.download-cancel-btn {
+    background: rgba(244, 67, 54, 0.1);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    border-radius: 4px;
+    padding: 2px 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #f44336;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+.download-cancel-btn:hover {
+    background: rgba(244, 67, 54, 0.2);
+    border-color: rgba(244, 67, 54, 0.5);
+    color: #ff5252;
+}
+
+.download-status-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+.download-status-badge.completed {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4caf50;
+}
+
+.download-status-badge.error {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+}
+
+.download-status-badge.cancelled {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+}
+
+/* Progress Container */
+.download-progress-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.download-progress-bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.download-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #7dd3fc 0%, #a78bfa 100%);
+    transition: width 0.3s ease-out;
+    border-radius: 2px;
+}
+
+.download-progress-text {
+    font-size: 0.7rem;
+    color: #7dd3fc;
+    font-weight: 600;
+    min-width: 28px;
+    text-align: right;
+}
+
+/* Completed/Error Items */
+.download-item-completed,
+.download-item-error,
+.download-item-cancelled {
+    background: rgba(255, 255, 255, 0.02);
+    border-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Animation */
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}

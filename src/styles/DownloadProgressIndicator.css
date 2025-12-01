@@ -1,0 +1,145 @@
+/* styles/DownloadProgressIndicator.css */
+
+.download-indicator-container {
+    position: fixed;
+    top: 20px; /* Adjust as needed */
+    right: 20px; /* Adjust as needed */
+    width: 300px; /* Or a suitable width */
+    background: #1e1e2d; /* Darker background */
+    border: 1px solid #333;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1000; /* Ensure it's above other content */
+    color: #f0f0f0; /* Light text color */
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 0.9rem;
+    max-height: 80vh; /* Limit height for many tasks */
+    overflow-y: auto; /* Enable scrolling if too many tasks */
+}
+
+.download-indicator-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: #252538; /* Slightly lighter header background */
+    border-bottom: 1px solid #333;
+    cursor: pointer;
+}
+
+.download-indicator-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.download-indicator-header .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.download-indicator-body {
+    padding: 10px 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.no-downloads-message {
+    text-align: center;
+    color: #aaa;
+    padding: 10px 0;
+    font-style: italic;
+}
+
+.download-task-item {
+    background: #2a2a3e; /* Task item background */
+    border-radius: 6px;
+    padding: 8px 10px;
+    border: 1px solid #3a3a50;
+}
+
+.download-task-item .task-info {
+    display: flex;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+.download-task-item .task-icon {
+    margin-right: 8px;
+    /* Specific colors for status */
+}
+
+.download-task-item .task-icon.downloading {
+    color: #61dafb; /* Blue for downloading */
+}
+
+.download-task-item .task-icon.completed {
+    color: #4caf50; /* Green for completed */
+}
+
+.download-task-item .task-icon.error {
+    color: #f44336; /* Red for error */
+}
+
+.download-task-item .task-name {
+    flex-grow: 1;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.download-task-item .task-progress {
+    font-weight: 600;
+    min-width: 40px; /* Ensure space for percentage */
+    text-align: right;
+    color: #61dafb;
+}
+
+.progress-bar-background {
+    background-color: #3a3a50; /* Background of the progress bar */
+    border-radius: 3px;
+    height: 6px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background-color: #61dafb; /* Fill color of the progress bar */
+    width: 0%;
+    transition: width 0.3s ease-in-out; /* Smooth transition for progress */
+    border-radius: 3px;
+}
+
+/* Status-specific styling for completed/error tasks */
+.download-task-item.task-completed .task-status-text {
+    color: #4caf50;
+    font-weight: 500;
+}
+
+.download-task-item.task-error .task-status-text {
+    color: #f44336;
+    font-weight: 500;
+}
+
+.download-task-item.task-completed .task-info,
+.download-task-item.task-error .task-info {
+    justify-content: flex-start;
+}
+
+.download-task-item.task-completed .task-progress,
+.download-task-item.task-error .task-progress {
+    display: none; /* Hide percentage for completed/error */
+}
+
+.download-task-item.task-completed .progress-bar-background,
+.download-task-item.task-error .progress-bar-background {
+    display: none; /* Hide bar for completed/error */
+}
+
+.download-task-item .task-status-text {
+    margin-left: auto; /* Push status text to the right */
+    font-size: 0.85rem;
+}

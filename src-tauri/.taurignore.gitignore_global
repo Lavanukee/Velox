@@ -1,0 +1,5 @@
+python-x86_64-windows/**
+**/__pycache__/**
+**/*.pyc
+**/*.pyo
+**/*.pyd

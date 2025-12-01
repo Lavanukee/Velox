@@ -1,0 +1,9 @@
+python-x86_64-windows/
+target
+target/**
+venv
+venv/**
+.idea
+.vscode
+__pycache__
+*.pyc

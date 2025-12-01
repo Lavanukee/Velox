@@ -1,0 +1,25 @@
+huggingface_hub
+requests
+mistral_common
+sentencepiece
+datasets
+accelerate
+peft
+trl
+bitsandbytes
+xformers
+packaging
+tensorboard>=2.16.0
+
+
+
+# Core dependencies - let Unsloth manage versions
+unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+unsloth-zoo
+
+# These will be auto-installed by Unsloth, but listing for clarity
+transformers==4.57.2
+
+# GGUF module from llama.cpp (required for GGUF conversion)
+# Install directly from the gguf-py subdirectory in the llama.cpp repo
+git+https://github.com/ggml-org/llama.cpp.git#subdirectory=gguf-py
