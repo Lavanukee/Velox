@@ -1,9 +1,23 @@
 import os
 import sys
+
+# ============================================================================
+# CRITICAL: Windows Multiprocessing Fix - MUST BE AT VERY TOP
+# ============================================================================
+# Disable tokenizers parallelism to prevent fork bombs on Windows
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# Force single-process for datasets mapping on Windows
+os.environ["HF_DATASETS_DISABLE_CACHING"] = "1"
+
 import torch
 import json
 import argparse
 import logging
+# Import datasets to configure it
+import datasets
+datasets.disable_progress_bar()
+datasets.logging.set_verbosity_info()
+
 from typing import Optional, Dict, Any
 from pathlib import Path
 
@@ -16,6 +30,19 @@ if hasattr(torch, "_inductor") and not hasattr(torch._inductor, "config"):
     class DummyInductorConfig:
         pass
     torch._inductor.config = DummyInductorConfig
+
+# Auto-install missing dependencies (specifically tensorboard for Windows)
+try:
+    import tensorboard
+except ImportError:
+    print("Warning: tensorboard not found. Attempting to install...")
+    import subprocess
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "tensorboard"])
+        print("Successfully installed tensorboard.")
+    except Exception as e:
+        print(f"Failed to auto-install tensorboard: {e}")
+        print("Please install it manually: pip install tensorboard")
 
 # ============================================================================
 # 2. IMPORTS
@@ -30,17 +57,33 @@ except ImportError as e:
     FastLanguageModel = None
     FastVisionModel = None
 
-from transformers import (
-    TrainingArguments, 
-    AutoConfig, 
-    AutoProcessor, 
-    AutoTokenizer,
-    AutoModelForSpeechSeq2Seq,
-    AutoModelForCausalLM,
-    BitsAndBytesConfig,
-    PretrainedConfig,
-    CONFIG_MAPPING
-)
+# Handle potential torchvision version mismatch before importing transformers
+try:
+    from transformers import (
+        TrainingArguments, 
+        AutoConfig, 
+        AutoProcessor, 
+        AutoTokenizer,
+        AutoModelForSpeechSeq2Seq,
+        AutoModelForCausalLM,
+        BitsAndBytesConfig,
+        PretrainedConfig,
+        CONFIG_MAPPING
+    )
+except RuntimeError as e:
+    if "torchvision" in str(e) or "does not exist" in str(e):
+        print("\n" + "="*60)
+        print("❌ CRITICAL ERROR: PyTorch/TorchVision Version Mismatch")
+        print("="*60)
+        print(f"Error: {e}")
+        print("\nThis error occurs when torch and torchvision versions are incompatible.")
+        print("\nTo fix this, run the environment setup again:")
+        print("  python src-tauri/scripts/setup_torch.py")
+        print("\nOr manually install compatible versions:")
+        print("  pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 --index-url https://download.pytorch.org/whl/cu121")
+        print("="*60)
+        sys.exit(1)
+    raise
 from trl import SFTTrainer
 from datasets import Dataset, load_from_disk
 from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
@@ -144,6 +187,11 @@ def resolve_dataset_path(dataset_arg: str) -> str:
         os.path.join(project_root, "data", "datasets", dataset_name, "processed_data"),
         os.path.join(project_root, "data", "datasets", dataset_arg, "processed_data", "train"),
         os.path.join(project_root, "data", "datasets", dataset_arg, "processed_data"),
+        # Additional candidates for paths that might start from the app's root but omit 'data'
+        os.path.join(project_root, "datasets", dataset_name, "processed_data", "train"), # Fix: Add this to specifically look for `datasets` directly under app root
+        os.path.join(project_root, "datasets", dataset_name, "processed_data"), # Fix: Add this
+        os.path.join(project_root, "datasets", dataset_arg, "processed_data", "train"), # Fix: Add this
+        os.path.join(project_root, "datasets", dataset_arg, "processed_data"), # Fix: Add this
         os.path.join(dataset_arg, "processed_data", "train"),
         os.path.join(dataset_arg, "processed_data"),
     ]
@@ -183,6 +231,52 @@ def resolve_dataset_path(dataset_arg: str) -> str:
 # ============================================================================
 
 def main(args):
+    # =========================================================================
+    # OOM SAFEGUARDS - Check VRAM and setup memory management
+    # =========================================================================
+    print("\n" + "="*60)
+    print("🔍 GPU Memory Check")
+    print("="*60)
+    
+    if torch.cuda.is_available():
+        # Clear any stale CUDA cache
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        
+        # Get VRAM info
+        total_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        free_mem, total = torch.cuda.mem_get_info()
+        free_mem_gb = free_mem / 1024**3
+        used_mem_gb = (total - free_mem) / 1024**3
+        
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"Total VRAM: {total_mem:.1f} GB")
+        print(f"Available VRAM: {free_mem_gb:.1f} GB")
+        print(f"Currently Used: {used_mem_gb:.1f} GB")
+        
+        # Auto-adjust batch size based on available VRAM
+        original_batch_size = args.batch_size
+        if free_mem_gb < 6:
+            args.batch_size = 1
+            print(f"⚠️ LOW VRAM (<6GB): batch_size forced to 1")
+        elif free_mem_gb < 12:
+            args.batch_size = min(args.batch_size, 2)
+            print(f"⚠️ Moderate VRAM (<12GB): batch_size capped at {args.batch_size}")
+        
+        if args.batch_size != original_batch_size:
+            print(f"   (was {original_batch_size}, now {args.batch_size})")
+        
+        # Warn if critically low
+        if free_mem_gb < 4:
+            print("\n" + "!"*60)
+            print("⚠️ CRITICAL: Less than 4GB VRAM available!")
+            print("   Consider closing other GPU-using applications.")
+            print("!"*60)
+    else:
+        print("❌ No CUDA GPU available! Training will be very slow or fail.")
+    
+    print("="*60 + "\n")
+    
     # --- Dataset Path Resolution ---
     PROCESSED_TRAIN_DIR = resolve_dataset_path(args.dataset)
     OUTPUT_DIR = args.output_dir if hasattr(args, 'output_dir') and args.output_dir else "data/outputs"
@@ -392,16 +486,68 @@ def main(args):
     if model_category == "text":
         if "text" not in dataset.column_names:
             print("Formatting dataset for Text Model...")
-            def format_text(examples):
-                if "instruction" in examples and "output" in examples:
-                    inst = examples["instruction"]
-                    inp = examples.get("input", "")
-                    out = examples["output"]
-                    text = f"Instruction: {inst}\nInput: {inp}\nOutput: {out}" if inp else f"Instruction: {inst}\nOutput: {out}"
-                    return {"text": text}
-                return examples
             
-            dataset = dataset.map(format_text, batched=False)
+            # Use Unsloth's chat template utility if available and requested
+            if use_unsloth and hasattr(args, 'chat_template') and args.chat_template and args.chat_template != "none":
+                print(f"Applying Unsloth Chat Template: {args.chat_template}")
+                from unsloth.chat_templates import get_chat_template
+                
+                try:
+                    tokenizer = get_chat_template(
+                        tokenizer,
+                        chat_template = args.chat_template,
+                        mapping = {"role" : "from", "content" : "value", "user" : "human", "assistant" : "gpt"}, # Default ShareGPT style
+                    )
+                    
+                    def formatting_prompts_func(examples):
+                        # Assumes dataset has "conversations" or similar structure if using strict chat templates
+                        # If dataset is just instruction/input/output, we need to convert it first for the template
+                        convos = []
+                        texts = []
+                        for i in range(len(examples["instruction"])):
+                            # Convert Alpaca style to simplistic "chat" for template application if needed
+                            # But standard get_chat_template expects a specific structure usually.
+                            
+                            # FALLBACK: If dataset is Alpaca (instruction/input/output), standard template might be overkill
+                            # UNLESS we manually construct the message list.
+                            
+                            inst = examples["instruction"][i]
+                            inp = examples["input"][i]
+                            out = examples["output"][i]
+                            
+                            # Construct a "conversation" for the chat template
+                            user_text = f"{inst}\n{inp}" if inp else inst
+                            messages = [
+                                {"role": "user", "content": user_text},
+                                {"role": "assistant", "content": out}
+                            ]
+                            
+                            # Apply template
+                            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+                            texts.append(text)
+                            
+                        return {"text": texts, }
+                        
+                    dataset = dataset.map(formatting_prompts_func, batched=True)
+                    
+                except Exception as e:
+                    print(f"Warning: Failed to apply Unsloth chat template: {e}. Falling back to default Alpaca format.")
+                    # Fallback logic below
+                    
+            # Default Alpaca-style formatting if no template specified or fallback
+            if "text" not in dataset.column_names: 
+                print("Using default Alpaca-style formatting...")
+                def format_text(examples):
+                    if "instruction" in examples and "output" in examples:
+                        inst = examples["instruction"]
+                        inp = examples.get("input", "")
+                        out = examples["output"]
+                        text = f"Instruction: {inst}\nInput: {inp}\nOutput: {out}" if inp else f"Instruction: {inst}\nOutput: {out}"
+                        return {"text": text}
+                    return examples
+            
+                dataset = dataset.map(format_text, batched=False)
+                
             print(f"✓ Dataset formatted. Sample: {dataset[0]['text'][:100]}...")
             
     # ------------------------------------------------------------------------
@@ -422,10 +568,12 @@ def main(args):
         lr_scheduler_type="linear",
         seed=3407,
         output_dir=OUTPUT_DIR,
-        report_to="none",
+        logging_dir=OUTPUT_DIR,
+        report_to="tensorboard",
         save_strategy="steps",
         save_steps=100,
         save_total_limit=3,
+        dataloader_num_workers=0, # Force single process for dataloader on Windows
     )
 
     # ------------------------------------------------------------------------
@@ -453,11 +601,15 @@ def main(args):
         )
         
     else:  # TEXT
+        # CRITICAL: On Windows, use single-process tokenization to prevent spawn issues
         trainer = SFTTrainer(
             model=model,
             processing_class=tokenizer,
             train_dataset=dataset,
             args=training_args,
+            dataset_num_proc=1,  # FORCE single-process tokenization (prevents Windows spawn loop)
+            dataset_batch_size=1000,  # Batch for efficiency despite single proc
+            dataset_kwargs={"num_proc": 1}, # Extra safety: pass as kwargs in case init arg is ignored
         )
 
     # ------------------------------------------------------------------------
@@ -471,6 +623,39 @@ def main(args):
         trainer_stats = trainer.train()
         print("\n✓ Training completed successfully!")
         
+        # Log peak memory usage
+        if torch.cuda.is_available():
+            peak_mem = torch.cuda.max_memory_allocated() / 1024**3
+            print(f"   Peak VRAM used: {peak_mem:.2f} GB")
+        
+    except RuntimeError as e:
+        error_str = str(e).lower()
+        if "out of memory" in error_str or "cuda out of memory" in error_str:
+            # Specific OOM handling
+            print("\n" + "!"*60)
+            print("❌ OUT OF MEMORY ERROR!")
+            print("!"*60)
+            
+            if torch.cuda.is_available():
+                # Try to recover by clearing cache
+                torch.cuda.empty_cache()
+                allocated = torch.cuda.memory_allocated() / 1024**3
+                peak = torch.cuda.max_memory_allocated() / 1024**3
+                print(f"\nMemory at crash:")
+                print(f"  Peak allocated: {peak:.2f} GB")
+                print(f"  Current: {allocated:.2f} GB")
+            
+            print("\n💡 Suggestions to fix OOM:")
+            print("  1. Reduce batch_size to 1")
+            print("  2. Reduce max_seq_length (try 512 or 256)")
+            print("  3. Close other GPU-using applications")
+            print("  4. Use a smaller model or LoRA rank")
+            print("!"*60)
+            sys.exit(1)
+        else:
+            # Re-raise non-OOM errors
+            raise
+            
     except Exception as e:
         print(f"\n❌ Training failed: {e}")
         import traceback
@@ -493,6 +678,17 @@ def main(args):
         sys.exit(1)
 
 if __name__ == "__main__":
+    # CRITICAL: Windows multiprocessing support - must be first thing in main block
+    import multiprocessing
+    multiprocessing.freeze_support()
+    
+    # Set spawn method for Windows compatibility (prevents fork issues)
+    if sys.platform == "win32":
+        try:
+            multiprocessing.set_start_method('spawn', force=True)
+        except RuntimeError:
+            pass  # Already set
+    
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--dataset", type=str, required=True)
@@ -503,7 +699,8 @@ if __name__ == "__main__":
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--max_seq_length", type=int, default=2048)
     parser.add_argument("--output_dir", type=str, default="data/outputs")
-    
+    parser.add_argument("--chat_template", type=str, default="none", help="Chat template to use (llama-3, chatml, zephyr, etc) if using Unsloth")
+
     args = parser.parse_args()
     
     # Ensure UTF-8 output

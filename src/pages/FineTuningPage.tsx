@@ -34,7 +34,11 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
         ftIsTraining: isTraining, setFtIsTraining: setIsTraining,
         ftTrainingStatus: trainingStatus, setFtTrainingStatus: setTrainingStatus,
         ftTensorboardUrl: tensorboardUrl, setFtTensorboardUrl: setTensorboardUrl,
-        ftInitMessage: initMessage, setFtInitMessage: setInitMessage
+        ftInitMessage: initMessage, setFtInitMessage: setInitMessage,
+        // Setup state from context (persists across tab navigation)
+        ftIsSettingUp: isSettingUp, setFtIsSettingUp: setIsSettingUp,
+        ftSetupComplete: setupComplete, setFtSetupComplete: setSetupComplete,
+        ftSetupProgress: setupProgress, setFtSetupProgress: setSetupProgress
     } = useApp();
 
     // Resources
@@ -45,11 +49,6 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
     // HF Downloads
     const [isDownloadingModel, setIsDownloadingModel] = useState(false);
     const [isDownloadingDataset, setIsDownloadingDataset] = useState(false);
-
-    // Setup State
-    const [isSettingUp, setIsSettingUp] = useState(false);
-    const [setupComplete, setSetupComplete] = useState(false);
-    const [setupProgress, setSetupProgress] = useState({ current: 0, total: 0, message: '' });
 
     useEffect(() => {
         loadResources();
@@ -183,12 +182,20 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                 maxSeqLength,
             });
 
-            const port = (result as any).tensorboard_port || 6006;
-            // Fallback: if backend STATUS is missed, set iframe after a longer delay
-            setTimeout(() => {
-                setTensorboardUrl(`http://localhost:${port}`);
-            }, 12000);
-            addNotification('Training started successfully', 'success');
+            const port = (result as any).tensorboard_port;
+            if (port) {
+                // Set URL immediately with returned port
+                // Small delay to allow process to bind, but browser will retry
+                setTimeout(() => {
+                    setTensorboardUrl(`http://localhost:${port}`);
+                }, 1000);
+            } else {
+                setTensorboardUrl('http://localhost:6006');
+            }
+
+            // Force status to training so iframe shows up
+            setTrainingStatus('training');
+            setTimeout(() => addNotification('Training started successfully', 'success'), 500);
         } catch (error) {
             addLogMessage(`ERROR starting training: ${error}`);
             addNotification('Failed to start training', 'error');

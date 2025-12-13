@@ -82,6 +82,14 @@ interface AppContextType {
   setFtTensorboardUrl: (url: string) => void;
   ftInitMessage: string;
   setFtInitMessage: (msg: string) => void;
+
+  // Setup State (persisted across tab navigation)
+  ftIsSettingUp: boolean;
+  setFtIsSettingUp: (isSettingUp: boolean) => void;
+  ftSetupComplete: boolean;
+  setFtSetupComplete: (complete: boolean) => void;
+  ftSetupProgress: { current: number; total: number; message: string };
+  setFtSetupProgress: (progress: { current: number; total: number; message: string }) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -126,6 +134,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [ftTrainingStatus, setFtTrainingStatus] = useState<'idle' | 'initializing' | 'training'>('idle');
   const [ftTensorboardUrl, setFtTensorboardUrl] = useState('');
   const [ftInitMessage, setFtInitMessage] = useState('');
+
+  // Setup State (persisted across tab navigation)
+  const [ftIsSettingUp, setFtIsSettingUp] = useState(false);
+  const [ftSetupComplete, setFtSetupComplete] = useState(() => {
+    // Check localStorage on init
+    return localStorage.getItem('pythonEnvSetup') === 'complete';
+  });
+  const [ftSetupProgress, setFtSetupProgress] = useState({ current: 0, total: 7, message: '' });
 
   useEffect(() => {
     // Load persisted mode
@@ -177,6 +193,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ftTrainingStatus, setFtTrainingStatus,
     ftTensorboardUrl, setFtTensorboardUrl,
     ftInitMessage, setFtInitMessage,
+    ftIsSettingUp, setFtIsSettingUp,
+    ftSetupComplete, setFtSetupComplete,
+    ftSetupProgress, setFtSetupProgress,
   };
 
   return (

@@ -73,6 +73,24 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         }
     }, [modelConfig]);
 
+    // Check and download inference engine if missing
+    useEffect(() => {
+        const checkBinary = async () => {
+            try {
+                const exists: boolean = await invoke('check_llama_binary_command');
+                if (!exists) {
+                    addLogMessage('Inference engine not found. Downloading...');
+                    // This might take a while, so we log progress
+                    await invoke('download_llama_binary_command');
+                    addLogMessage('Inference engine installed successfully.');
+                }
+            } catch (error) {
+                addLogMessage(`Error checking/downloading inference engine: ${error}`);
+            }
+        };
+        checkBinary();
+    }, []);
+
     useEffect(() => {
         loadResources();
         checkServerStatus();

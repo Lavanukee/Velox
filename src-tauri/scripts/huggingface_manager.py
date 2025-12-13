@@ -5,7 +5,7 @@ import os
 import requests
 import shutil
 from typing import Optional, List, Dict, Any
-from huggingface_hub import HfApi, configure_http_backend
+from huggingface_hub import HfApi, configure_http_backend, hf_hub_download
 
 # Configure encoding for Windows consoles
 sys.stdout.reconfigure(encoding='utf-8')
@@ -139,14 +139,10 @@ def cmd_list_files(args):
         sys.exit(1)
 
 def cmd_download(args):
-    """Download specific files from a repository."""
-    # Ensure token is used if provided
-    
+    """Download specific files from a repository using hf_hub_download."""
     base_folder = os.path.abspath(args.output)
-    os.makedirs(base_folder, exist_ok=True)
     
     files_to_download = args.files.split(',') if args.files else []
-    
     if not files_to_download:
         print("Error: No files specified for download.", file=sys.stderr)
         sys.exit(1)
@@ -155,61 +151,36 @@ def cmd_download(args):
     sys.stderr.flush()
     
     total_files = len(files_to_download)
-    
+    repo_type = "dataset" if args.type == "dataset" else "model"
+
     for idx, filename in enumerate(files_to_download):
         filename = filename.strip()
         if not filename: continue
-
-        # Construct destination path
-        dest_path = os.path.join(base_folder, filename)
-        dest_dir = os.path.dirname(dest_path)
-        os.makedirs(dest_dir, exist_ok=True)
         
         print(f"Processing file {idx + 1}/{total_files}: {filename}", file=sys.stderr)
         sys.stderr.flush()
         
         try:
-            # Get the URL
-            # Note: repo_type needs to be in URL for datasets? 
-            # huggingface.co/datasets/user/repo/resolve... vs huggingface.co/user/repo/resolve...
+            hf_hub_download(
+                repo_id=args.repo_id,
+                filename=filename,
+                repo_type=repo_type,
+                token=args.token,
+                local_dir=base_folder,
+                local_dir_use_symlinks=False,
+            )
             
-            url_type_segment = "datasets/" if args.type == "dataset" else ""
-            url = f"https://huggingface.co/{url_type_segment}{args.repo_id}/resolve/main/{filename}"
-            headers = get_auth_headers(args.token)
-            
-            # Emit start of file download
-            print(f"PROGRESS:{int((idx / total_files) * 100)}", file=sys.stderr)
+            # Emit progress update (per file completion)
+            global_percent = int(((idx + 1) / total_files) * 100)
+            print(f"PROGRESS:{global_percent}", file=sys.stderr)
             sys.stderr.flush()
-            
-            # Stream download
-            with requests.get(url, headers=headers, stream=True) as r:
-                r.raise_for_status()
-                total_size = int(r.headers.get('content-length', 0))
-                block_size = 1024 * 1024 # 1MB chunks
-                wrote = 0
-                
-                with open(dest_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=block_size):
-                        if chunk:
-                            wrote += len(chunk)
-                            f.write(chunk)
-                            
-                            # Calculate progress
-                            if total_size > 0:
-                                file_progress = (wrote / total_size)
-                                global_percent = int(((idx + file_progress) / total_files) * 100)
-                                print(f"PROGRESS:{global_percent}", file=sys.stderr)
-                                sys.stderr.flush()
 
         except Exception as e:
             print(f"Error downloading {filename}: {e}", file=sys.stderr)
-            sys.stderr.flush()
             sys.exit(1)
 
     print("PROGRESS:100", file=sys.stderr)
-    sys.stderr.flush()
     print("Download complete.", file=sys.stderr)
-    sys.stderr.flush()
 
 def cmd_convert(args):
     """Convert a downloaded dataset to Arrow format compatible with train.py."""

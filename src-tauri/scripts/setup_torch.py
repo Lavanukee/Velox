@@ -46,18 +46,28 @@ def install_torch():
         cuda_version = get_cuda_version()
         print(f"Targeting CUDA version: {cuda_version}")
         
-        # Unsloth recommends Torch 2.4.0 or 2.5.0 + CUDA 12.1 or 12.4
-        # We will force a reinstall of a compatible version
+        # IMPORTANT: Pin specific versions for Unsloth compatibility
+        # torch 2.6.0 + torchvision 0.21.0 + torchaudio 2.6.0 are verified compatible
+        # Using CUDA 12.4 as it has the best package availability for torch 2.6
         
-        # Construct pip install command
-        # Using the stable index for cu124 or cu121
+        # Override detected version to 124 for torch 2.6 compatibility
+        cuda_version = "124"  # Force cu124 for torch 2.6.x availability
         index_url = f"https://download.pytorch.org/whl/cu{cuda_version}"
         
-        print(f"Installing PyTorch with CUDA {cuda_version} support...")
+        # Pin versions to avoid version mismatch between torch and torchvision
+        # torch 2.6.0 is required for Unsloth-zoo's int1 dtype support
+        torch_version = "2.6.0"
+        torchvision_version = "0.21.0"
+        torchaudio_version = "2.6.0"
+        
+        print(f"Installing PyTorch {torch_version} with CUDA {cuda_version} support...")
+        print("(Pinned versions for Unsloth compatibility)")
         cmd = [
             sys.executable, "-m", "pip", "install", 
             "--upgrade", "--force-reinstall",
-            "torch", "torchvision", "torchaudio",
+            f"torch=={torch_version}+cu{cuda_version}",
+            f"torchvision=={torchvision_version}+cu{cuda_version}",
+            f"torchaudio=={torchaudio_version}+cu{cuda_version}",
             "--index-url", index_url
         ]
 

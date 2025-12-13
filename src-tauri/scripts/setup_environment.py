@@ -59,7 +59,9 @@ def main():
         print("\n⚠️ Base packages installation failed. Continuing anyway...")
 
     # Step 2: Install Triton separately with version constraint
-    if not run_pip(["install", "-U", "triton-windows<3.6"], "Installing Triton"):
+    # IMPORTANT: triton-windows 3.2.x is required for PyTorch 2.6 compatibility
+    # version 3.3+ has breaking changes with AttrsDescriptor
+    if not run_pip(["install", "-U", "triton-windows<3.3"], "Installing Triton"):
         print("\n⚠️ Triton installation failed. Continuing anyway...")
     
     # Step 3: Run setup_torch.py to install PyTorch with CUDA
@@ -79,11 +81,17 @@ def main():
     if not run_pip(["install"] + unsloth_packages, "Installing Unsloth"):
         print("\n⚠️ Unsloth installation failed. Continuing anyway...")
     
-    # Step 5: Install specific transformers version and gguf
+    # Step 5: CRITICAL - Reinstall PyTorch with CUDA (Unsloth may pull in CPU version)
+    # This ensures we have the GPU-accelerated version
+    print("\n⚠️ Reinstalling PyTorch with CUDA to ensure Unsloth didn't override it...")
+    if not run_python_script(torch_setup_script, "Reinstalling PyTorch CUDA (Unsloth may have overwritten)"):
+        print("\n⚠️ PyTorch CUDA reinstall failed. You may have CPU-only PyTorch.")
+    
+    # Step 6: Install specific transformers version and gguf
+    # Note: xformers is installed by Unsloth with correct version
     final_packages = [
-        "transformers==4.57.2",
+        "transformers>=4.45.0",  # Let Unsloth manage specific version
         "git+https://github.com/ggml-org/llama.cpp.git#subdirectory=gguf-py",
-        "xformers",
     ]
     
     if not run_pip(["install"] + final_packages, "Installing transformers and gguf"):

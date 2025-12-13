@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useApp } from './context/AppContext';
 import { DownloadTask } from './types';
@@ -132,6 +133,14 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
     useEffect(() => {
         loadResources();
         loadToken();
+
+        const unlistenModel = listen('model_downloaded', () => loadResources());
+        const unlistenDataset = listen('dataset_downloaded', () => loadResources());
+
+        return () => {
+            unlistenModel.then(f => f());
+            unlistenDataset.then(f => f());
+        };
     }, []);
 
     // --- Debounced Search Effect ---
