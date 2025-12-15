@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { invoke } from "@tauri-apps/api/core";
 
 type UserMode = 'user' | 'power';
 
@@ -38,6 +39,32 @@ interface AppContextType {
   setSystemPrompt: (prompt: string) => void;
   isServerRunning: boolean;
   setIsServerRunning: (running: boolean) => void;
+
+  // Advanced Inference Options (Power User)
+  infFlashAttn: boolean;
+  setInfFlashAttn: (val: boolean) => void;
+  infNoMmap: boolean;
+  setInfNoMmap: (val: boolean) => void;
+  infGpuLayers: number;
+  setInfGpuLayers: (val: number) => void;
+  infBatchSize: number;
+  setInfBatchSize: (val: number) => void;
+  infUbatchSize: number;
+  setInfUbatchSize: (val: number) => void;
+  infThreads: number;
+  setInfThreads: (val: number) => void;
+  infServerStatus: 'idle' | 'loading' | 'ready' | 'error';
+  setInfServerStatus: (status: 'idle' | 'loading' | 'ready' | 'error') => void;
+
+  // Chat Feature Toggles
+  infShowMetrics: boolean;
+  setInfShowMetrics: (val: boolean) => void;
+  infEnableWebSearch: boolean;
+  setInfEnableWebSearch: (val: boolean) => void;
+  infEnableCodeExec: boolean;
+  setInfEnableCodeExec: (val: boolean) => void;
+  infEnableCanvas: boolean;
+  setInfEnableCanvas: (val: boolean) => void;
 
   // Resource Dashboard State
   rdHfQuery: string;
@@ -90,6 +117,21 @@ interface AppContextType {
   setFtSetupComplete: (complete: boolean) => void;
   ftSetupProgress: { current: number; total: number; message: string };
   setFtSetupProgress: (progress: { current: number; total: number; message: string }) => void;
+
+  // Global Setup State
+  showPythonSetup: boolean;
+  setShowPythonSetup: (show: boolean) => void;
+  isInitializing: boolean;
+  setIsInitializing: (init: boolean) => void;
+  setupProgressPercent: number;
+  setSetupProgressPercent: (val: number) => void;
+  setupMessage: string;
+  setSetupMessage: (msg: string) => void;
+  setupLoadedBytes: number;
+  setSetupLoadedBytes: (val: number) => void;
+  setupTotalBytes: number;
+  setSetupTotalBytes: (val: number) => void;
+  runGlobalSetup: (forceDownload?: boolean) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -110,6 +152,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [topK, setTopK] = useState(40);
   const [systemPrompt, setSystemPrompt] = useState('You are a helpful AI assistant.');
   const [isServerRunning, setIsServerRunning] = useState(false);
+
+  // Advanced Inference Options (Power User)
+  const [infFlashAttn, setInfFlashAttn] = useState(true);
+  const [infNoMmap, setInfNoMmap] = useState(true); // true by default for better perf
+  const [infGpuLayers, setInfGpuLayers] = useState(99);
+  const [infBatchSize, setInfBatchSize] = useState(512);
+  const [infUbatchSize, setInfUbatchSize] = useState(512);
+  const [infThreads, setInfThreads] = useState(0); // 0 = auto
+  const [infServerStatus, setInfServerStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+
+  // Chat Feature Toggles
+  const [infShowMetrics, setInfShowMetrics] = useState(true);
+  const [infEnableWebSearch, setInfEnableWebSearch] = useState(false);
+  const [infEnableCodeExec, setInfEnableCodeExec] = useState(false);
+  const [infEnableCanvas, setInfEnableCanvas] = useState(true); // Canvas enabled by default
 
   // Resource Dashboard State
   const [rdHfQuery, setRdHfQuery] = useState('');
@@ -143,6 +200,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [ftSetupProgress, setFtSetupProgress] = useState({ current: 0, total: 7, message: '' });
 
+  // Global Setup State
+  const [showPythonSetup, setShowPythonSetup] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false); // Default false in context, App.tsx sets it true on mount? Or manage here?
+  const [setupProgressPercent, setSetupProgressPercent] = useState(0);
+  const [setupMessage, setSetupMessage] = useState("Initializing environment...");
+  const [setupLoadedBytes, setSetupLoadedBytes] = useState(0);
+  const [setupTotalBytes, setSetupTotalBytes] = useState(0);
+
+  const runGlobalSetup = useCallback(async (forceDownload = false) => {
+    try {
+      setShowPythonSetup(true);
+      setSetupProgressPercent(0);
+      setSetupMessage(forceDownload ? "Starting Python Download..." : "Initializing Setup...");
+      setSetupLoadedBytes(0);
+      setSetupTotalBytes(0);
+
+      if (forceDownload) {
+        await invoke('download_python_standalone_command');
+      }
+
+      await invoke('setup_python_env_command');
+
+      localStorage.setItem('pythonEnvSetup', 'complete');
+      setFtSetupComplete(true);
+      setShowPythonSetup(false);
+    } catch (error) {
+      console.error("Setup failed:", error);
+      setShowPythonSetup(false);
+      throw error;
+    }
+  }, []);
+
   useEffect(() => {
     // Load persisted mode
     const savedMode = localStorage.getItem('velox_user_mode') as UserMode;
@@ -173,6 +262,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     topK, setTopK,
     systemPrompt, setSystemPrompt,
     isServerRunning, setIsServerRunning,
+    infFlashAttn, setInfFlashAttn,
+    infNoMmap, setInfNoMmap,
+    infGpuLayers, setInfGpuLayers,
+    infBatchSize, setInfBatchSize,
+    infUbatchSize, setInfUbatchSize,
+    infThreads, setInfThreads,
+    infServerStatus, setInfServerStatus,
+    infShowMetrics, setInfShowMetrics,
+    infEnableWebSearch, setInfEnableWebSearch,
+    infEnableCodeExec, setInfEnableCodeExec,
+    infEnableCanvas, setInfEnableCanvas,
     rdHfQuery, setRdHfQuery,
     rdHfType, setRdHfType,
     rdSelectedPaths, setRdSelectedPaths,
@@ -196,6 +296,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ftIsSettingUp, setFtIsSettingUp,
     ftSetupComplete, setFtSetupComplete,
     ftSetupProgress, setFtSetupProgress,
+    // Global Setup
+    showPythonSetup, setShowPythonSetup,
+    isInitializing, setIsInitializing,
+    setupProgressPercent, setSetupProgressPercent,
+    setupMessage, setSetupMessage,
+    setupLoadedBytes, setSetupLoadedBytes,
+    setupTotalBytes, setSetupTotalBytes,
+    runGlobalSetup,
   };
 
   return (

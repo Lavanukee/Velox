@@ -1,8 +1,7 @@
 use crate::constants::{PYTHON_DIR, PYTHON_EXE, SCRIPTS_DIR};
-use crate::utils::get_project_root;
 use log::{debug, error};
-use std::collections::HashMap;
 use std::path::PathBuf;
+use tauri::Manager;
 use tokio::process::Child;
 use tokio::sync::Mutex;
 
@@ -27,20 +26,21 @@ impl Default for PythonProcessState {
 // Struct to hold the chat context (history) for the Llama server
 #[derive(Default)]
 pub struct LlamaChatContext {
-    pub chat_history: Mutex<Vec<HashMap<String, String>>>,
+    pub chat_history: Mutex<Vec<serde_json::Value>>,
 }
 
 // --- Helper: Resolve Python Path and Working Directory ---
-pub fn get_python_command() -> Result<(String, PathBuf), String> {
-    let project_root_dir = get_project_root();
+pub fn get_python_command(app_handle: &tauri::AppHandle) -> Result<(String, PathBuf), String> {
+    // Use data dir (AppData in prod, Project Root in debug)
+    let base_dir = crate::utils::get_data_dir(app_handle);
 
-    // 1. Try to find the bundled portable python
-    let portable_python_path = project_root_dir.join(PYTHON_DIR).join(PYTHON_EXE);
+    // 1. Try to find the bundled/downloaded python
+    let python_path = base_dir.join(PYTHON_DIR).join(PYTHON_EXE);
 
-    if portable_python_path.exists() {
-        let mut python_exe = portable_python_path
+    if python_path.exists() {
+        let mut python_exe = python_path
             .canonicalize()
-            .unwrap_or(portable_python_path.clone())
+            .unwrap_or(python_path.clone())
             .to_string_lossy()
             .to_string();
 
@@ -49,20 +49,37 @@ pub fn get_python_command() -> Result<(String, PathBuf), String> {
             python_exe = python_exe[4..].to_string();
         }
 
-        debug!("Using portable Python executable: {}", python_exe);
-        return Ok((python_exe, project_root_dir));
+        debug!("Using Python executable: {}", python_exe);
+        return Ok((python_exe, base_dir));
     }
 
-    // Error: No portable python found
-    error!("Portable Python not found at {:?}", portable_python_path);
+    // Error: No python found
+    error!("Python not found at {:?}", python_path);
     Err(format!(
-        "Portable Python not found. Expected at: {}",
-        portable_python_path.display()
+        "Python not found. Expected at: {}",
+        python_path.display()
     ))
 }
 
 // --- Helper: Resolve Script Path ---
-pub fn get_script_path(script_name: &str) -> String {
-    let script_path_in_project_root = PathBuf::from(SCRIPTS_DIR).join(script_name);
-    script_path_in_project_root.to_string_lossy().to_string()
+pub fn get_script_path(app_handle: &tauri::AppHandle, script_name: &str) -> String {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app_handle;
+        // Dev: use source files directly
+        let script_path = crate::utils::get_project_root()
+            .join(SCRIPTS_DIR)
+            .join(script_name);
+        return script_path.to_string_lossy().to_string();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        // Prod: use bundled resources
+        let resource_dir = app_handle
+            .path()
+            .resource_dir()
+            .expect("Failed to get resource dir");
+        let script_path = resource_dir.join("scripts").join(script_name);
+        return script_path.to_string_lossy().to_string();
+    }
 }

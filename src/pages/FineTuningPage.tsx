@@ -36,9 +36,8 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
         ftTensorboardUrl: tensorboardUrl, setFtTensorboardUrl: setTensorboardUrl,
         ftInitMessage: initMessage, setFtInitMessage: setInitMessage,
         // Setup state from context (persists across tab navigation)
-        ftIsSettingUp: isSettingUp, setFtIsSettingUp: setIsSettingUp,
-        ftSetupComplete: setupComplete, setFtSetupComplete: setSetupComplete,
-        ftSetupProgress: setupProgress, setFtSetupProgress: setSetupProgress
+        ftSetupComplete: setupComplete,
+        runGlobalSetup
     } = useApp();
 
     // Resources
@@ -52,22 +51,9 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
 
     useEffect(() => {
         loadResources();
-        checkSetupStatus();
 
         const unlistenPromise = listen('log', (event) => {
             const msg = event.payload as string;
-            const progressMatch = msg.match(/📦 \[(\d+)\/(\d+)\]/);
-            if (progressMatch) {
-                setSetupProgress({
-                    current: parseInt(progressMatch[1]),
-                    total: parseInt(progressMatch[2]),
-                    message: msg.split(']')[1]?.trim() || ''
-                });
-            }
-            if (msg.includes('✅ Python environment setup complete!')) {
-                setSetupComplete(true);
-                localStorage.setItem('pythonEnvSetup', 'complete');
-            }
             if (msg.includes('STATUS:')) {
                 const statusText = msg.split('STATUS:')[1].trim();
                 setInitMessage(statusText);
@@ -86,12 +72,6 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             unlistenPromise.then(f => f());
         };
     }, []);
-
-    const checkSetupStatus = () => {
-        if (localStorage.getItem('pythonEnvSetup') === 'complete') {
-            setSetupComplete(true);
-        }
-    };
 
     const loadResources = async () => {
         try {
@@ -219,17 +199,11 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
     };
 
     const handleSetupEnv = async () => {
-        setIsSettingUp(true);
-        setSetupProgress({ current: 0, total: 7, message: 'Initializing...' });
         try {
-            await invoke('setup_python_env_command');
-            setSetupComplete(true);
-            localStorage.setItem('pythonEnvSetup', 'complete');
+            await runGlobalSetup(false);
             addNotification('Environment setup complete', 'success');
         } catch (error) {
             addNotification('Setup failed', 'error');
-        } finally {
-            setIsSettingUp(false);
         }
     };
 
@@ -246,25 +220,9 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                     </p>
                 </div>
 
-                {isSettingUp ? (
-                    <div className="w-full max-w-md space-y-4">
-                        <div className="flex justify-between text-sm">
-                            <span>Installing dependencies...</span>
-                            <span>{setupProgress.current}/{setupProgress.total}</span>
-                        </div>
-                        <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                            <div
-                                className="h-full bg-accent-gradient transition-all duration-300"
-                                style={{ width: `${(setupProgress.current / setupProgress.total) * 100}%` }}
-                            />
-                        </div>
-                        <p className="text-xs text-gray-500">{setupProgress.message}</p>
-                    </div>
-                ) : (
-                    <Button size="lg" onClick={handleSetupEnv}>
-                        Install Dependencies
-                    </Button>
-                )}
+                <Button size="lg" onClick={handleSetupEnv}>
+                    Install Dependencies
+                </Button>
             </div>
         );
     }

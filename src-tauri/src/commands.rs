@@ -2,12 +2,11 @@ use futures_util::StreamExt;
 use log::{debug, error};
 use reqwest;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -29,9 +28,17 @@ fn get_binaries_dir(app_handle: &AppHandle) -> PathBuf {
 // --- COMMANDS ---
 
 #[tauri::command]
-pub async fn check_python_installed_command() -> Result<bool, String> {
-    match get_python_command() {
-        Ok(_) => Ok(true),
+pub async fn check_python_installed_command(app_handle: AppHandle) -> Result<bool, String> {
+    match get_python_command(&app_handle) {
+        Ok((python_exe, _)) => {
+            // Verify it actually runs
+            let output = create_hidden_command(&python_exe)
+                .arg("--version")
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(output.status.success())
+        }
         Err(_) => Ok(false),
     }
 }
@@ -47,8 +54,21 @@ pub async fn check_llama_binary_command(app_handle: AppHandle) -> Result<bool, S
     };
     let path = bin_dir.join(name);
     debug!("Checking for llama binary at: {:?}", path);
-    let exists = path.exists();
-    debug!("Llama binary exists: {}", exists);
+
+    let mut exists = path.exists();
+
+    // On Windows with CUDA, verify the DLL exists too, otherwise we might be stuck with CPU-only binaries
+    if exists && cfg!(windows) {
+        if let ComputeBackend::Cuda = detect_backend() {
+            let cuda_dll = bin_dir.join("ggml-cuda.dll");
+            if !cuda_dll.exists() {
+                debug!("Llama binary exists but ggml-cuda.dll is missing. Triggering re-download.");
+                exists = false;
+            }
+        }
+    }
+
+    debug!("Llama binary valid: {}", exists);
     Ok(exists)
 }
 
@@ -58,7 +78,9 @@ pub async fn download_llama_binary_command(
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let backend = detect_backend();
-    debug!("Detected backend: {:?}", backend);
+    let msg = format!("Detected compute backend: {:?}", backend);
+    debug!("{}", msg);
+    window.emit("log", msg).ok();
 
     let (main_keywords, dep_keywords): (Vec<&str>, Vec<&str>) =
         match (std::env::consts::OS, &backend) {
@@ -601,7 +623,7 @@ pub async fn start_llama_server_command(
         batch_size.to_string(),
         "--ubatch-size".to_string(),
         ubatch_size.to_string(),
-        "--n-gpu-layers".to_string(),
+        "-ngl".to_string(),
         gpu_layers.unwrap_or(0).to_string(),
         "--host".to_string(),
         "0.0.0.0".to_string(),
@@ -873,7 +895,7 @@ pub async fn send_chat_message_command(
     llama_chat_context: State<'_, Arc<LlamaChatContext>>,
     host: String,
     port: u16,
-    message: String,
+    message: serde_json::Value,
     system_prompt: String,
     temperature: f64,
     top_p: f64,
@@ -881,33 +903,38 @@ pub async fn send_chat_message_command(
     _ctx_size: u64,
 ) -> Result<String, String> {
     debug!(
-        "Received send_chat_message_command with message: {}",
+        "Received send_chat_message_command with message: {:?}",
         message
     );
     let mut chat_history = llama_chat_context.chat_history.lock().await;
 
-    let mut user_message_map = HashMap::new();
-    user_message_map.insert("role".to_string(), "user".to_string());
-    user_message_map.insert("content".to_string(), message.clone());
-    chat_history.push(user_message_map);
+    // Use serde_json::json! macro for constructing messages
+    let user_message = serde_json::json!({
+        "role": "user",
+        "content": message
+    });
+    chat_history.push(user_message);
 
     let mut messages_for_server = Vec::new();
 
     if chat_history.len() == 1
-        || chat_history
-            .last()
-            .map_or(false, |m| m.get("role").map_or(false, |r| r == "user"))
+        || chat_history.last().map_or(false, |m| {
+            m.get("role")
+                .and_then(|v| v.as_str())
+                .map_or(false, |r| r == "user")
+        })
     {
-        let mut system_message_map = HashMap::new();
-        system_message_map.insert("role".to_string(), "system".to_string());
-        system_message_map.insert("content".to_string(), system_prompt.clone());
-        messages_for_server.push(system_message_map);
+        let system_message = serde_json::json!({
+            "role": "system",
+            "content": system_prompt
+        });
+        messages_for_server.push(system_message);
     }
     messages_for_server.extend(chat_history.iter().cloned());
 
     #[derive(Serialize)]
     struct LlamaChatRequest {
-        messages: Vec<HashMap<String, String>>,
+        messages: Vec<serde_json::Value>,
         temperature: f64,
         top_p: f64,
         top_k: u64,
@@ -955,10 +982,11 @@ pub async fn send_chat_message_command(
             .ok_or("Failed to parse content")?
             .to_string();
 
-        let mut bot_message_map = HashMap::new();
-        bot_message_map.insert("role".to_string(), "assistant".to_string());
-        bot_message_map.insert("content".to_string(), bot_response.clone());
-        chat_history.push(bot_message_map);
+        let bot_message = serde_json::json!({
+            "role": "assistant",
+            "content": bot_response
+        });
+        chat_history.push(bot_message);
         Ok(bot_response)
     } else {
         Err(format!("Llama server error: {}", res.status()))
@@ -1016,31 +1044,37 @@ pub async fn send_chat_message_streaming_command(
     llama_chat_context: State<'_, Arc<LlamaChatContext>>,
     host: String,
     port: u16,
-    message: String,
+    message: serde_json::Value,
     system_prompt: String,
     temperature: f64,
     top_p: f64,
     top_k: u64,
     _ctx_size: u64,
 ) -> Result<String, String> {
-    debug!("Streaming chat message: {}", message);
+    debug!("Streaming chat message: {:?}", message);
 
     let mut chat_history = llama_chat_context.chat_history.lock().await;
-    let mut user_message_map = HashMap::new();
-    user_message_map.insert("role".to_string(), "user".to_string());
-    user_message_map.insert("content".to_string(), message.clone());
-    chat_history.push(user_message_map);
+
+    // Use serde_json::json! macro for constructing messages
+    let user_message = serde_json::json!({
+        "role": "user",
+        "content": message
+    });
+    chat_history.push(user_message);
 
     let mut messages_for_server = Vec::new();
     if chat_history.len() == 1
-        || chat_history
-            .last()
-            .map_or(false, |m| m.get("role").map_or(false, |r| r == "user"))
+        || chat_history.last().map_or(false, |m| {
+            m.get("role")
+                .and_then(|v| v.as_str())
+                .map_or(false, |r| r == "user")
+        })
     {
-        let mut system_message_map = HashMap::new();
-        system_message_map.insert("role".to_string(), "system".to_string());
-        system_message_map.insert("content".to_string(), system_prompt.clone());
-        messages_for_server.push(system_message_map);
+        let system_message = serde_json::json!({
+            "role": "system",
+            "content": system_prompt
+        });
+        messages_for_server.push(system_message);
     }
     messages_for_server.extend(chat_history.iter().cloned());
 
@@ -1051,7 +1085,7 @@ pub async fn send_chat_message_streaming_command(
 
     #[derive(Serialize)]
     struct LlamaChatStreamRequest {
-        messages: Vec<HashMap<String, String>>,
+        messages: Vec<serde_json::Value>,
         temperature: f64,
         top_p: f64,
         top_k: u64,
@@ -1083,8 +1117,25 @@ pub async fn send_chat_message_streaming_command(
     };
 
     window
-        .emit("log", "Starting streaming request to Llama server...")
+        .emit("log", format!("Streaming chat message..."))
         .ok();
+
+    // DEBUG: Log the request body to see what we are sending for Vision
+    let debug_body_str = serde_json::to_string_pretty(&request_body).unwrap_or_default();
+    debug!("Llama Request Body: {}", debug_body_str);
+    // Be careful not to emit huge base64 strings to frontend logs affecting perf, but for debugging we need to see structure
+    if debug_body_str.len() > 2000 {
+        window
+            .emit(
+                "log",
+                format!("Request body (truncated): {}", &debug_body_str[..2000]),
+            )
+            .ok();
+    } else {
+        window
+            .emit("log", format!("Request body: {}", debug_body_str))
+            .ok();
+    }
 
     let start_time = std::time::Instant::now();
     let mut first_token_time: Option<std::time::Instant> = None;
@@ -1188,7 +1239,7 @@ pub async fn send_chat_message_streaming_command(
 pub async fn get_chat_response_command(
     _window: Window,
     llama_chat_context: State<'_, Arc<LlamaChatContext>>,
-) -> Result<Vec<HashMap<String, String>>, String> {
+) -> Result<Vec<serde_json::Value>, String> {
     let chat_history = llama_chat_context.chat_history.lock().await;
     Ok(chat_history.clone())
 }
@@ -1230,11 +1281,12 @@ pub struct HFSearchResult {
 
 #[tauri::command]
 pub async fn search_huggingface_command(
+    app_handle: AppHandle,
     query: String,
     resource_type: String,
 ) -> Result<Vec<HFSearchResult>, String> {
-    let (python_exe, work_dir) = get_python_command()?;
-    let script = get_script_path("huggingface_manager.py");
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "huggingface_manager.py");
     let token = if let Ok(t) = fs::read_to_string(HF_TOKEN_FILE).await {
         Some(t.trim().to_string())
     } else {
@@ -1285,12 +1337,13 @@ pub struct HFFile {
 
 #[tauri::command]
 pub async fn list_hf_repo_files_command(
+    app_handle: AppHandle,
     repo_id: String,
     token: Option<String>,
     resource_type: Option<String>,
 ) -> Result<Vec<HFFile>, String> {
-    let (python_exe, work_dir) = get_python_command()?;
-    let script = get_script_path("huggingface_manager.py");
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "huggingface_manager.py");
     let repo_type = resource_type.as_deref().unwrap_or("model");
 
     let mut cmd = create_hidden_command(&python_exe);
@@ -1335,8 +1388,8 @@ pub async fn download_hf_model_command(
     token: Option<String>,
     task_id: Option<String>,
 ) -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command()?;
-    let script = get_script_path("huggingface_manager.py");
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "huggingface_manager.py");
     let data_dir = get_data_dir(&app_handle);
     let sanitized_repo_id = model_id.replace('/', "--");
     let base_output_folder = data_dir
@@ -1458,8 +1511,8 @@ pub async fn download_hf_dataset_command(
     token: Option<String>,
     task_id: Option<String>,
 ) -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command()?;
-    let script = get_script_path("huggingface_manager.py");
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "huggingface_manager.py");
     let data_dir = get_data_dir(&app_handle);
     let sanitized_id = dataset_id.replace('/', "--");
     let output_folder = data_dir.join("data").join("datasets").join(&sanitized_id);
@@ -1572,8 +1625,8 @@ pub async fn convert_dataset_command(
     source_path: String,
     destination_path: String,
 ) -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command()?;
-    let script = get_script_path("huggingface_manager.py");
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "huggingface_manager.py");
     let data_dir = get_data_dir(&app_handle);
 
     let source_abs = if PathBuf::from(&source_path).is_absolute() {
@@ -1729,15 +1782,15 @@ pub async fn convert_hf_to_gguf_command(
     output_path: Option<String>,
     quantization_type: String,
 ) -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command()?;
-    let script = get_script_path("convert_hf_to_gguf.py");
+    let (python_exe, work_dir) = get_python_command(window.app_handle())?;
+    let script = get_script_path(window.app_handle(), "convert_hf_to_gguf.py");
 
     let mut cmd = create_hidden_command(&python_exe);
     cmd.arg(&script);
-    if let Some(out) = output_path {
+    if let Some(out) = &output_path {
         cmd.arg("--outfile").arg(out);
     }
-    cmd.arg("--outtype").arg(quantization_type);
+    cmd.arg("--outtype").arg(&quantization_type);
     cmd.arg(&source_path);
     cmd.current_dir(&work_dir)
         .stdout(Stdio::piped())
@@ -1780,6 +1833,104 @@ pub async fn convert_hf_to_gguf_command(
     if status.success() {
         Ok("Conversion complete".to_string())
     } else {
+        // Auto-fix: Check for ModuleNotFoundError: No module named 'gguf'
+        if err.contains("ModuleNotFoundError: No module named 'gguf'") {
+            let win_c3 = window.clone();
+            win_c3
+                .emit(
+                    "log",
+                    "GGUF module missing. Attempting auto-fix (installing from git)...",
+                )
+                .ok();
+
+            // Run pip install
+            let install_cmd = create_hidden_command(&python_exe)
+                .arg("-m")
+                .arg("pip")
+                .arg("install")
+                .arg("gguf @ git+https://github.com/ggerganov/llama.cpp.git#subdirectory=gguf-py")
+                .current_dir(&work_dir)
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if install_cmd.status.success() {
+                win_c3
+                    .emit("log", "GGUF installed successfully. Retrying conversion...")
+                    .ok();
+
+                // Retry the original command
+                let mut retry_cmd = create_hidden_command(&python_exe);
+                retry_cmd.arg(&script);
+                if let Some(out) = output_path {
+                    retry_cmd.arg("--outfile").arg(out);
+                }
+                retry_cmd.arg("--outtype").arg(&quantization_type);
+                retry_cmd.arg(&source_path);
+                retry_cmd
+                    .current_dir(&work_dir)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+
+                let mut retry_child = retry_cmd.spawn().map_err(|e| e.to_string())?;
+                let retry_stdout = retry_child.stdout.take().ok_or("No stdout on retry")?;
+                let retry_stderr = retry_child.stderr.take().ok_or("No stderr on retry")?;
+
+                // Stream retry output
+                let win_c4 = window.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(retry_stdout);
+                    let mut line = String::new();
+                    while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                        win_c4
+                            .emit("log", format!("CONVERT (RETRY): {}", line.trim()))
+                            .ok();
+                        line.clear();
+                    }
+                });
+
+                let win_c5 = window.clone();
+                let retry_stderr_handle = tokio::spawn(async move {
+                    let mut reader = BufReader::new(retry_stderr);
+                    let mut line = String::new();
+                    let mut cap = String::new();
+                    while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                        let t = line.trim();
+                        if !t.is_empty() {
+                            win_c5
+                                .emit("log", format!("CONVERT ERR (RETRY): {}", t))
+                                .ok();
+                            cap.push_str(t);
+                            cap.push('\n');
+                        }
+                        line.clear();
+                    }
+                    cap
+                });
+
+                let retry_status = retry_child.wait().await.map_err(|e| e.to_string())?;
+                let retry_err_msg = retry_stderr_handle.await.map_err(|e| e.to_string())?;
+
+                if retry_status.success() {
+                    return Ok("Conversion complete (after auto-fix)".to_string());
+                } else {
+                    return Err(format!(
+                        "Conversion failed after auto-fix: {}",
+                        retry_err_msg.trim()
+                    ));
+                }
+            } else {
+                let install_err = String::from_utf8_lossy(&install_cmd.stderr);
+                win_c3
+                    .emit("log", format!("Auto-fix failed: {}", install_err))
+                    .ok();
+                return Err(format!(
+                    "Missing GGUF module and auto-fix failed: {}",
+                    install_err
+                ));
+            }
+        }
+
         Err(format!("Conversion failed: {}", err.trim()))
     }
 }
@@ -1792,8 +1943,8 @@ pub async fn convert_lora_to_gguf_command(
     output_path: Option<String>,
     quantization_type: String,
 ) -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command()?;
-    let script = get_script_path("convert_lora_to_gguf.py");
+    let (python_exe, work_dir) = get_python_command(window.app_handle())?;
+    let script = get_script_path(window.app_handle(), "convert_lora_to_gguf.py");
 
     let mut cmd = create_hidden_command(&python_exe);
     cmd.arg(&script)
@@ -1893,7 +2044,7 @@ pub async fn start_training_command(
     lora_alpha: u32,
     max_seq_length: u32,
 ) -> Result<serde_json::Value, String> {
-    let (python_exe, work_dir) = get_python_command()?;
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
     let data_dir = get_data_dir(&app_handle);
     let dataset_abs = if PathBuf::from(&dataset_path).is_absolute() {
         dataset_path
@@ -1957,25 +2108,30 @@ pub async fn start_training_command(
                 let mut child_guard = python_process_state.tensorboard_child.lock().await;
                 *child_guard = Some(child);
                 *tb_port_guard = Some(port);
-
-                // Optional: log TB output
-                // But for now just assume it starts.
+                let _ = app_handle.emit("log", format!("TensorBoard started on port {}", port));
                 port
             }
             Err(e) => return Err(format!("Failed to start TensorBoard: {}", e)),
         }
     };
 
-    // We should probably start TB if not started, but previous code did it in setup.
-    // If it's not running, we might be missing it. But let's focus on training.
-
-    let script = get_script_path("train.py");
+    let script = get_script_path(&app_handle, "train.py");
     let mut cmd = create_hidden_command(&python_exe);
     #[cfg(target_os = "windows")]
     {
-        // use std::os::windows::process::CommandExt; // Unused import warning fix
         cmd.creation_flags(0x08000000);
     }
+
+    let output_dir_abs = data_dir
+        .join("data")
+        .join("outputs")
+        .join(&project_name)
+        .to_string_lossy()
+        .to_string();
+
+    // Ensure output directory exists (Tensorboard might need it or script will create it)
+    // std::fs::create_dir_all(&output_dir_abs).unwrap_or_default();
+    // Actually let script handle it, or create parent.
 
     cmd.arg(&script)
         .arg("--model")
@@ -1995,7 +2151,7 @@ pub async fn start_training_command(
         .arg("--max_seq_length")
         .arg(max_seq_length.to_string())
         .arg("--output_dir")
-        .arg(format!("data/outputs/{}", project_name))
+        .arg(&output_dir_abs)
         .current_dir(&work_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2054,13 +2210,9 @@ pub async fn stop_training_command() -> Result<String, String> {
 }
 
 #[allow(dead_code)]
-fn get_python_standalone_dir(_app_handle: &AppHandle) -> PathBuf {
-    let src_tauri_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    src_tauri_dir
-        .parent()
-        .expect("Failed to get project root directory")
-        .to_path_buf()
-        .join("python")
+fn get_python_standalone_dir(app_handle: &AppHandle) -> PathBuf {
+    let data_dir = get_data_dir(app_handle);
+    data_dir.join("python")
 }
 
 #[tauri::command]
@@ -2081,10 +2233,8 @@ pub async fn download_python_standalone_command(
     {
         window.emit("setup_progress", serde_json::json!({ "step": "init", "message": "Starting Python download...", "progress": 0 })).ok();
 
-        // Simplified download for brevity but functional
         let url = "https://github.com/indygreg/python-build-standalone/releases/download/20241016/cpython-3.11.10+20241016-x86_64-pc-windows-msvc-install_only.tar.gz";
         let client = reqwest::Client::new();
-        // Retry logic for 503 errors
         let mut retries = 3;
         let mut resp = None;
         while retries > 0 {
@@ -2113,31 +2263,108 @@ pub async fn download_python_standalone_command(
         }
         let resp = resp.ok_or("Failed to download python after retries")?;
 
-        let content = resp.bytes().await.map_err(|e| e.to_string())?;
+        // Streaming download logic
+        let total_size = resp.content_length().unwrap_or(0);
+        let mut stream = resp.bytes_stream();
+        let mut downloaded: u64 = 0;
+        let mut buffer = Vec::new();
+        let mut last_emit = std::time::Instant::now();
 
-        window.emit("setup_progress", serde_json::json!({ "step": "download", "message": "Preparing extraction...", "progress": 50 })).ok();
+        while let Some(item) = stream.next().await {
+            let chunk = item.map_err(|e| format!("Download error: {}", e))?;
+            downloaded += chunk.len() as u64;
+            buffer.extend_from_slice(&chunk);
+
+            // Throttle updates to ~100ms to avoid flooding frontend
+            if last_emit.elapsed().as_millis() > 100 {
+                let progress_percent = if total_size > 0 {
+                    (downloaded as f64 / total_size as f64) * 100.0
+                } else {
+                    0.0
+                };
+
+                // Emit detailed stats payload
+                window
+                    .emit(
+                        "setup_progress",
+                        serde_json::json!({
+                            "step": "download",
+                            "message": "Downloading Python...",
+                            "progress": progress_percent,
+                            "loaded": downloaded,
+                            "total": total_size
+                        }),
+                    )
+                    .ok();
+
+                last_emit = std::time::Instant::now();
+            }
+        }
+
+        // Final download progress event
+        window
+            .emit(
+                "setup_progress",
+                serde_json::json!({
+                    "step": "download",
+                    "message": "Download complete. Extracting...",
+                    "progress": 100.0,
+                    "loaded": downloaded,
+                    "total": total_size
+                }),
+            )
+            .ok();
+
+        let content = bytes::Bytes::from(buffer);
+
+        window.emit("setup_progress", serde_json::json!({ "step": "download", "message": "Preparing extraction...", "progress": 100 })).ok();
 
         let target_dir = get_python_standalone_dir(&app_handle);
         let project_root = target_dir.parent().ok_or("No root")?.to_path_buf();
 
-        // Delete existing Python directory if it exists (prevents file lock errors on reinstall)
+        // Delete existing Python directory if it exists
         if target_dir.exists() {
-            window.emit("setup_progress", serde_json::json!({ "step": "cleanup", "message": "Cleaning up old Python installation...", "progress": 55 })).ok();
+            window.emit("setup_progress", serde_json::json!({ "step": "cleanup", "message": "Cleaning up old Python installation...", "progress": 100 })).ok();
+
+            // Kill any running python/tensorboard processes to release file locks
+            #[cfg(target_os = "windows")]
+            {
+                let _ = create_hidden_std_command("taskkill")
+                    .args(&["/F", "/IM", "python.exe"])
+                    .output();
+                let _ = create_hidden_std_command("taskkill")
+                    .args(&["/F", "/IM", "tensorboard.exe"])
+                    .output();
+                // Give OS time to release handles
+                tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = create_hidden_std_command("pkill").arg("python").output();
+                let _ = create_hidden_std_command("pkill")
+                    .arg("tensorboard")
+                    .output();
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            }
+
             if let Err(e) = std::fs::remove_dir_all(&target_dir) {
-                window
-                    .emit(
-                        "log",
-                        format!(
-                            "Warning: Could not fully remove old Python directory: {}",
-                            e
-                        ),
-                    )
-                    .ok();
-                // Try to continue anyway - extraction might work if files aren't locked
+                // Retry once after a delay
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                if let Err(e2) = std::fs::remove_dir_all(&target_dir) {
+                    window
+                        .emit(
+                            "log",
+                            format!(
+                                "Warning: Could not fully remove old Python directory: {}. {}",
+                                e, e2
+                            ),
+                        )
+                        .ok();
+                }
             }
         }
 
-        window.emit("setup_progress", serde_json::json!({ "step": "extract", "message": "Extracting Python...", "progress": 60 })).ok();
+        window.emit("setup_progress", serde_json::json!({ "step": "extract", "message": "Extracting Python...", "progress": 100 })).ok();
 
         tokio::task::spawn_blocking(move || {
             let tar = flate2::read::GzDecoder::new(std::io::Cursor::new(content));
@@ -2158,8 +2385,8 @@ pub async fn download_python_standalone_command(
 }
 
 #[tauri::command]
-pub async fn debug_python_path_command() -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command()?;
+pub async fn debug_python_path_command(app_handle: AppHandle) -> Result<String, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
     Ok(format!(
         "Python Exe: {}, Working Dir: {:?}",
         python_exe, work_dir
@@ -2168,13 +2395,13 @@ pub async fn debug_python_path_command() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn take_screenshot_path_command(
-    _app_handle: AppHandle,
+    app_handle: AppHandle,
     output_dir: String,
     _delay: f64,
 ) -> Result<String, String> {
     // Calls the python screenshot tool
-    let (python_exe, work_dir) = get_python_command()?;
-    let script_path = get_script_path("screenshot_tool.py");
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script_path = get_script_path(&app_handle, "screenshot_tool.py");
 
     let mut cmd = create_hidden_command(&python_exe);
     cmd.arg(&script_path)
@@ -2299,12 +2526,12 @@ pub async fn get_tensorboard_url_command(
 #[tauri::command]
 pub async fn start_data_collector_command(
     python_process_state: State<'_, Arc<PythonProcessState>>,
-    _app_handle: AppHandle,
+    app_handle: AppHandle,
     output_dir: String,
     dataset_file: String,
 ) -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command()?;
-    let script_path = get_script_path("data_collecter.py"); // Ensure filename matches script on disk
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script_path = get_script_path(&app_handle, "data_collecter.py"); // Ensure filename matches script on disk
 
     // Kill existing if any
     {
@@ -2373,9 +2600,9 @@ pub async fn list_lora_adapters_command(app_handle: AppHandle) -> Result<Vec<Str
 #[tauri::command]
 pub async fn setup_python_env_command(
     window: Window,
-    _app_handle: AppHandle,
+    app_handle: AppHandle,
 ) -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command()?;
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
 
     // Helper to run pip commands
     let run_pip = |args: Vec<&str>, step_name: &str, progress: u8| {
@@ -2457,6 +2684,7 @@ pub async fn setup_python_env_command(
             "tensorboard",
             "huggingface_hub",
             "requests",
+            "gguf @ git+https://github.com/ggerganov/llama.cpp.git#subdirectory=gguf-py",
         ],
         "Core Dependencies",
         40,
@@ -2486,4 +2714,89 @@ pub async fn setup_python_env_command(
 
     window.emit("setup_progress", serde_json::json!({ "step": "complete", "message": "Environment Setup Complete!", "progress": 100 })).ok();
     Ok("Setup complete".to_string())
+}
+
+// --- TOOL EXECUTION ---
+
+#[tauri::command]
+pub async fn save_custom_tool_command(
+    app_handle: tauri::AppHandle,
+    tool_name: String,
+    tool_code: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let resource_dir = app_handle
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?;
+
+    // In built app, resources are flattened or strictly structure?
+    // Usually resources are in 'resources' folder.
+    // If 'scripts' is a resource, it should be in resource_dir/scripts.
+    let scripts_dir = resource_dir.join("scripts");
+
+    let custom_tools_dir = scripts_dir.join("custom_tools");
+    if !custom_tools_dir.exists() {
+        std::fs::create_dir_all(&custom_tools_dir).map_err(|e| e.to_string())?;
+    }
+
+    let file_path = custom_tools_dir.join(format!("{}.py", tool_name));
+    std::fs::write(&file_path, tool_code).map_err(|e| e.to_string())?;
+
+    Ok(format!("Tool {} saved successfully", tool_name))
+}
+
+#[tauri::command]
+pub async fn execute_tool_command(
+    app_handle: AppHandle,
+    tool_name: String,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use std::process::Stdio;
+
+    let (python_exe, _cwd) = get_python_command(&app_handle)?;
+    let script_path = get_script_path(&app_handle, "tools.py");
+
+    debug!("Executing tool: {} with args: {:?}", tool_name, args);
+
+    let mut cmd = create_hidden_command(&python_exe);
+    cmd.arg(&script_path)
+        .arg(&tool_name)
+        .arg(serde_json::to_string(&args).unwrap_or_default())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute tool: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        error!("Tool execution failed: {}", stderr);
+        return Err(format!("Tool execution failed: {}", stderr));
+    }
+
+    // Parse the JSON result
+    let result: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse tool result: {} - Output: {}", e, stdout))?;
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn check_server_health_command(port: u16) -> Result<bool, String> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("http://127.0.0.1:{}/health", port))
+        .timeout(std::time::Duration::from_millis(500))
+        .send()
+        .await;
+
+    match res {
+        Ok(r) => Ok(r.status().is_success()),
+        Err(_) => Ok(false),
+    }
 }

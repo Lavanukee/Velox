@@ -754,29 +754,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cuafinetuning"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "env_logger",
- "flate2",
- "futures-util",
- "log",
- "reqwest 0.11.27",
- "serde",
- "serde_json",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-opener",
- "tauri-plugin-shell",
- "tokio",
- "zip",
-]
-
-[[package]]
 name = "darling"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5096,6 +5073,29 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "velox"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "env_logger",
+ "flate2",
+ "futures-util",
+ "log",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-opener",
+ "tauri-plugin-shell",
+ "tokio",
+ "zip",
+]
 
 [[package]]
 name = "version-compare"

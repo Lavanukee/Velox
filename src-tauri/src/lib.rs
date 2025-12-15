@@ -67,7 +67,7 @@ pub fn run() {
                 };
                 drop(listener);
 
-                let (python_exe, work_dir) = match get_python_command() {
+                let (python_exe, work_dir) = match get_python_command(&app_handle) {
                     Ok(r) => r,
                     Err(e) => {
                         app_handle
@@ -137,6 +137,8 @@ pub fn run() {
             check_python_installed_command,
             check_llama_binary_command,
             download_llama_binary_command,
+            check_server_health_command,
+            execute_tool_command,
             save_model_config_command,
             load_model_configs_command,
             delete_model_config_command,
@@ -179,7 +181,9 @@ pub fn run() {
             get_hf_token_command,
             save_hf_token_command,
             start_data_collector_command,
-            get_tensorboard_url_command
+            get_tensorboard_url_command,
+            execute_tool_command,
+            save_custom_tool_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

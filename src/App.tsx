@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AppProvider } from "./context/AppContext";
+import { AppProvider, useApp } from "./context/AppContext";
 import { AppStateProvider } from "./context/AppStateContext";
 import { Layout } from "./components/Layout";
 import { AppView, ModelConfig, DownloadTask } from "./types";
@@ -35,9 +35,16 @@ function AppContent() {
   const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  // Python Setup State
-  const [showPythonSetup, setShowPythonSetup] = useState(false);
-  const [setupProgressPercent, setSetupProgressPercent] = useState(0);
+  // Python Setup State (from Context)
+  const {
+    showPythonSetup,
+    isInitializing, setIsInitializing,
+    setupProgressPercent, setSetupProgressPercent,
+    setupMessage, setSetupMessage,
+    setupLoadedBytes, setSetupLoadedBytes,
+    setupTotalBytes, setSetupTotalBytes,
+    runGlobalSetup
+  } = useApp();
 
   const updateDownloadTask = useCallback((id: string, update: Partial<DownloadTask>) => {
     setDownloadTasks(prev => {
@@ -80,27 +87,6 @@ function AppContent() {
     }, 5000);
   };
 
-  // Unified setup function for both initial setup and reinstallation
-  const runSetup = useCallback(async (forceDownload = false) => {
-    try {
-      setShowPythonSetup(true);
-      setSetupProgressPercent(0);
-
-      if (forceDownload) {
-        await invoke('download_python_standalone_command');
-      }
-
-      await invoke('setup_python_env_command');
-
-      setShowPythonSetup(false);
-      addNotification("Setup complete!", "success");
-    } catch (error) {
-      addLogMessage(`Setup error: ${error}`);
-      setShowPythonSetup(false);
-      addNotification(`Setup failed: ${error}`, "error");
-    }
-  }, []);
-
   useEffect(() => {
     const unlistenLog = listen("log", (event) => {
       addLogMessage(`TAURI_BACKEND: ${event.payload as string}`);
@@ -119,8 +105,11 @@ function AppContent() {
       }
     });
 
-    const unlistenSetup = listen<{ step: string, message: string, progress: number }>("setup_progress", (event) => {
+    const unlistenSetup = listen<{ step: string, message: string, progress: number, loaded?: number, total?: number }>("setup_progress", (event) => {
       setSetupProgressPercent(event.payload.progress);
+      if (event.payload.message) setSetupMessage(event.payload.message);
+      if (event.payload.loaded !== undefined) setSetupLoadedBytes(event.payload.loaded);
+      if (event.payload.total !== undefined) setSetupTotalBytes(event.payload.total);
     });
 
     const initializeApp = async () => {
@@ -136,12 +125,18 @@ function AppContent() {
 
     const checkPython = async () => {
       try {
+        setSetupMessage("Verifying Python Environment...");
         const isInstalled = await invoke<boolean>('check_python_installed_command');
         if (!isInstalled) {
-          await runSetup(true);
+          setSetupMessage("Environment missing or broken. Starting setup...");
+          await runGlobalSetup(true);
+          addNotification("Setup complete!", "success");
         }
       } catch (error) {
         addLogMessage(`Python check error: ${error}`);
+        addNotification(`Setup failed: ${error}`, "error");
+      } finally {
+        setIsInitializing(false);
       }
     };
 
@@ -154,7 +149,7 @@ function AppContent() {
       unlistenStatus.then(f => f());
       unlistenSetup.then(f => f());
     };
-  }, [updateDownloadTask, runSetup]);
+  }, [updateDownloadTask, runGlobalSetup]);
 
   const getTitle = () => {
     switch (currentView) {
@@ -175,8 +170,11 @@ function AppContent() {
       onNavigate={setCurrentView}
       title={getTitle()}
       downloadTasks={downloadTasks}
-      isSettingUp={showPythonSetup}
+      isSettingUp={showPythonSetup || isInitializing}
       setupProgress={setupProgressPercent}
+      setupMessage={setupMessage}
+      setupLoadedBytes={setupLoadedBytes}
+      setupTotalBytes={setupTotalBytes}
     >
       {/* Global Notifications - Premium styled */}
       <div style={{ position: 'fixed', top: '96px', right: '24px', zIndex: 100, display: 'flex', flexDirection: 'column', gap: '12px', pointerEvents: 'none' }}>
@@ -278,8 +276,22 @@ function AppContent() {
 
       {currentView === AppView.Settings && (
         <SettingsPage
-          onReinstallPython={() => runSetup(true)}
-          onReinstallDependencies={() => runSetup(false)}
+          onReinstallPython={async () => {
+            try {
+              await runGlobalSetup(true);
+              addNotification("Reinstall complete", "success");
+            } catch (e) {
+              addNotification(`Reinstall failed: ${e}`, "error");
+            }
+          }}
+          onReinstallDependencies={async () => {
+            try {
+              await runGlobalSetup(false);
+              addNotification("Dependencies updated", "success");
+            } catch (e) {
+              addNotification(`Update failed: ${e}`, "error");
+            }
+          }}
         />
       )}
 

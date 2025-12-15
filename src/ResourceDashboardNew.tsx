@@ -129,6 +129,19 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
     const [selectedWeights, setSelectedWeights] = useState<Set<string>>(new Set());
     const [selectedDatasetFiles, setSelectedDatasetFiles] = useState<Set<string>>(new Set());
 
+    const [isImportOpen, setIsImportOpen] = useState(false);
+    const importRef = React.useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (importRef.current && !importRef.current.contains(event.target as Node)) {
+                setIsImportOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
     // --- Initialization ---
     useEffect(() => {
         loadResources();
@@ -653,16 +666,70 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                         </button>
                     )}
 
-                    <div className="rd-dropdown-container">
-                        <button className="btn btn-secondary">
-                            <FolderInput size={16} style={{ marginRight: '8px' }} />
-                            Import
-                        </button>
-                        <div className="rd-dropdown-menu">
-                            <div className="rd-dropdown-item" onClick={() => handleImport('model')}>Import Model</div>
-                            <div className="rd-dropdown-item" onClick={() => handleImport('lora')}>Import LoRA</div>
-                            <div className="rd-dropdown-item" onClick={() => handleImport('dataset')}>Import Dataset</div>
+                    <div className="rd-dropdown-container" ref={importRef}>
+                        <div
+                            onClick={() => setIsImportOpen(!isImportOpen)}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                padding: '10px 14px',
+                                background: 'rgba(0,0,0,0.3)',
+                                border: isImportOpen ? '1px solid rgba(139,92,246,0.5)' : '1px solid rgba(255,255,255,0.15)',
+                                borderRadius: '10px',
+                                color: 'white',
+                                fontSize: '14px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                            }}
+                        >
+                            <FolderInput size={16} />
+                            <span>Import</span>
+                            <ChevronDown size={14} style={{ marginLeft: '4px', transform: isImportOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', color: '#9ca3af' }} />
                         </div>
+                        {isImportOpen && (
+                            <div style={{
+                                position: 'absolute',
+                                top: '100%',
+                                right: 0,
+                                marginTop: '6px',
+                                width: '160px',
+                                background: '#18181b',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                borderRadius: '10px',
+                                boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+                                zIndex: 1000,
+                                padding: '6px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '2px'
+                            }}>
+                                <div
+                                    onClick={() => { handleImport('model'); setIsImportOpen(false); }}
+                                    style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', color: '#e4e4e7', transition: 'background 0.1s' }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                >
+                                    Import Model
+                                </div>
+                                <div
+                                    onClick={() => { handleImport('lora'); setIsImportOpen(false); }}
+                                    style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', color: '#e4e4e7', transition: 'background 0.1s' }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                >
+                                    Import LoRA
+                                </div>
+                                <div
+                                    onClick={() => { handleImport('dataset'); setIsImportOpen(false); }}
+                                    style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', color: '#e4e4e7', transition: 'background 0.1s' }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                >
+                                    Import Dataset
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <button className="btn btn-primary" onClick={() => setShowFindNew(true)}>

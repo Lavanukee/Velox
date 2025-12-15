@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::fs;
 use tokio::process::Command as TokioCommand;
 
@@ -38,10 +38,18 @@ pub fn get_project_root() -> PathBuf {
 }
 
 #[allow(unused_variables)]
-pub fn get_data_dir(_app_handle: &AppHandle) -> PathBuf {
-    // In the current project structure, data resides relative to project root.
-    // For production, this could switch to tauri's app_data_dir.
-    get_project_root()
+pub fn get_data_dir(app_handle: &AppHandle) -> PathBuf {
+    if cfg!(debug_assertions) {
+        // In dev, use the project root (where data/ folder is)
+        get_project_root()
+    } else {
+        // In production, use the system AppData folder
+        // e.g., C:\Users\User\AppData\Roaming\com.velox.dev or similar
+        app_handle
+            .path()
+            .app_data_dir()
+            .expect("Failed to get app data dir")
+    }
 }
 
 // --- File System Helpers ---
