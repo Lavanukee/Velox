@@ -90,13 +90,8 @@ function AppContent() {
 
   useEffect(() => {
     let isMounted = true;
-    const timeoutId = setTimeout(() => {
-      if (isMounted) {
-        console.warn("Initialization timeout reached. Forcing splash screen hide.");
-        setIsInitializing(false);
-        setShowPythonSetup(false);
-      }
-    }, 12000); // 12 second safety cap
+    // No more hardcoded 12s timeout. We rely on checkEnvironment
+    // to finish and trigger the SplashOverlay completion.
 
     const unlistenLog = listen("log", (event) => {
       if (isMounted) addLogMessage(`TAURI_BACKEND: ${event.payload as string}`);
@@ -173,13 +168,12 @@ function AppContent() {
           addNotification(`Startup Setup Failed: ${error}`, "error");
           // Even on error, we should eventually allow the user into the app
           setSetupProgressPercent(100);
+          setSetupMessage("SYSTEM_READY");
         }
       } finally {
         if (isMounted) {
           // We don't hide immediately here, we let the SplashOverlay 
-          // animation finish and call onSplashComplete, but the 
-          // safety timeout above ensures it's hidden regardless.
-          clearTimeout(timeoutId);
+          // animation finish and call onSplashComplete.
         }
       }
     };
@@ -189,7 +183,6 @@ function AppContent() {
 
     return () => {
       isMounted = false;
-      clearTimeout(timeoutId);
       unlistenLog.then((f) => f());
       unlistenProgress.then(f => f());
       unlistenStatus.then(f => f());

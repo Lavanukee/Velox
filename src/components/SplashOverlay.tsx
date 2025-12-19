@@ -122,7 +122,7 @@ export const SplashOverlay: React.FC<SplashOverlayProps> = ({
                 return prev;
             });
 
-            if (progress >= 100 && smoothProgress >= 99.9) {
+            if (progress >= 100 && smoothProgress >= 99.9 && message === "SYSTEM_READY") {
                 setIsComplete(true);
                 return;
             }
