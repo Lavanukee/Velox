@@ -116,7 +116,7 @@
     padding: 1.5rem;
     transition: all var(--transition-normal);
     position: relative;
-    overflow: hidden;
+    /* overflow: hidden; Removed to allow dropdowns */
 }
 
 .card-hoverable:hover {

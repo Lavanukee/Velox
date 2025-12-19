@@ -15,6 +15,7 @@ interface LayoutProps {
     setupMessage?: string;
     setupLoadedBytes?: number;
     setupTotalBytes?: number;
+    onSplashComplete?: () => void;
 }
 
 export const Layout: React.FC<LayoutProps> = ({
@@ -27,7 +28,8 @@ export const Layout: React.FC<LayoutProps> = ({
     setupProgress = 0,
     setupMessage = "Initializing environment...",
     setupLoadedBytes = 0,
-    setupTotalBytes = 0
+    setupTotalBytes = 0,
+    onSplashComplete
 }) => {
     return (
         <div className="flex h-screen bg-app text-white overflow-hidden" style={{ display: 'flex', height: '100vh', background: 'var(--bg-app)', color: 'var(--text-primary)', overflow: 'hidden' }}>
@@ -40,6 +42,7 @@ export const Layout: React.FC<LayoutProps> = ({
                     message={setupMessage}
                     loadedBytes={setupLoadedBytes}
                     totalBytes={setupTotalBytes}
+                    onComplete={onSplashComplete}
                 />
 
                 <Header title={title} />

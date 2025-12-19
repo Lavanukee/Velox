@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { invoke } from "@tauri-apps/api/core";
+import type { CanvasArtifact } from '../components/CanvasPanel';
 
 type UserMode = 'user' | 'power';
 
@@ -65,6 +66,24 @@ interface AppContextType {
   setInfEnableCodeExec: (val: boolean) => void;
   infEnableCanvas: boolean;
   setInfEnableCanvas: (val: boolean) => void;
+  infCanvasVisible: boolean;
+  setInfCanvasVisible: (val: boolean) => void;
+  infCanvasArtifacts: CanvasArtifact[];
+  setInfCanvasArtifacts: React.Dispatch<React.SetStateAction<CanvasArtifact[]>>;
+
+  // Auto-fit memory management (llama.cpp --fit)
+  infAutoFit: boolean;
+  setInfAutoFit: (val: boolean) => void;
+
+  // Global App Settings
+  autoUpdate: boolean;
+  setAutoUpdate: (val: boolean) => void;
+  showInfoTooltips: boolean;
+  setShowInfoTooltips: (val: boolean) => void;
+
+  // Inference Engine Selection
+  infInferenceEngine: 'llamacpp' | 'transformers';
+  setInfInferenceEngine: (engine: 'llamacpp' | 'transformers') => void;
 
   // Resource Dashboard State
   rdHfQuery: string;
@@ -132,6 +151,7 @@ interface AppContextType {
   setupTotalBytes: number;
   setSetupTotalBytes: (val: number) => void;
   runGlobalSetup: (forceDownload?: boolean) => Promise<void>;
+  theme: 'cyber' | 'forge';
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -166,7 +186,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [infShowMetrics, setInfShowMetrics] = useState(true);
   const [infEnableWebSearch, setInfEnableWebSearch] = useState(false);
   const [infEnableCodeExec, setInfEnableCodeExec] = useState(false);
-  const [infEnableCanvas, setInfEnableCanvas] = useState(true); // Canvas enabled by default
+  const [infEnableCanvas, setInfEnableCanvas] = useState(false);
+  const [infCanvasVisible, setInfCanvasVisible] = useState(false);
+  const [infCanvasArtifacts, setInfCanvasArtifacts] = useState<CanvasArtifact[]>([]);
+
+  // Auto-fit memory management (llama.cpp --fit)
+  const [infAutoFit, setInfAutoFit] = useState(true); // Default on for regular users
+
+  // Global App Settings
+  const [autoUpdate, setAutoUpdateState] = useState(true);
+  const [showInfoTooltips, setShowInfoTooltipsState] = useState(true);
+
+  // Inference Engine Selection
+  const [infInferenceEngine, setInfInferenceEngine] = useState<'llamacpp' | 'transformers'>('llamacpp');
 
   // Resource Dashboard State
   const [rdHfQuery, setRdHfQuery] = useState('');
@@ -202,7 +234,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Global Setup State
   const [showPythonSetup, setShowPythonSetup] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(false); // Default false in context, App.tsx sets it true on mount? Or manage here?
+  const [isInitializing, setIsInitializing] = useState(true); // Show splash on first load during Python check
   const [setupProgressPercent, setSetupProgressPercent] = useState(0);
   const [setupMessage, setSetupMessage] = useState("Initializing environment...");
   const [setupLoadedBytes, setSetupLoadedBytes] = useState(0);
@@ -249,6 +281,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUserMode(userMode === 'user' ? 'power' : 'user');
   };
 
+  const setAutoUpdate = (val: boolean) => {
+    setAutoUpdateState(val);
+    localStorage.setItem('velox_auto_update', JSON.stringify(val));
+  };
+
+  const setShowInfoTooltips = (val: boolean) => {
+    setShowInfoTooltipsState(val);
+    localStorage.setItem('velox_show_info', JSON.stringify(val));
+  };
+
+  useEffect(() => {
+    const savedAutoUpdate = localStorage.getItem('velox_auto_update');
+    if (savedAutoUpdate !== null) setAutoUpdateState(JSON.parse(savedAutoUpdate));
+
+    const savedShowInfo = localStorage.getItem('velox_show_info');
+    if (savedShowInfo !== null) setShowInfoTooltipsState(JSON.parse(savedShowInfo));
+  }, []);
+
   const value = {
     userMode, toggleUserMode, setUserMode,
     chatMessages, setChatMessages,
@@ -273,6 +323,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     infEnableWebSearch, setInfEnableWebSearch,
     infEnableCodeExec, setInfEnableCodeExec,
     infEnableCanvas, setInfEnableCanvas,
+    infCanvasVisible, setInfCanvasVisible,
+    infCanvasArtifacts, setInfCanvasArtifacts,
+    infAutoFit, setInfAutoFit,
+    infInferenceEngine, setInfInferenceEngine,
+    autoUpdate, setAutoUpdate,
+    showInfoTooltips, setShowInfoTooltips,
     rdHfQuery, setRdHfQuery,
     rdHfType, setRdHfType,
     rdSelectedPaths, setRdSelectedPaths,
@@ -304,6 +360,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setupLoadedBytes, setSetupLoadedBytes,
     setupTotalBytes, setSetupTotalBytes,
     runGlobalSetup,
+    theme: 'cyber' as 'cyber' | 'forge', // Default theme
   };
 
   return (

@@ -43,7 +43,7 @@ def main():
     
     # Step 1: Install base packages
     base_packages = [
-        "huggingface_hub",
+        "huggingface_hub[hf_xet]",
         "requests",
         "mistral_common",
         "sentencepiece",

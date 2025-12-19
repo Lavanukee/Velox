@@ -170,15 +170,19 @@
 
 .rd-item {
     display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    /* Gap handled by internal padding/margin */
+    padding: 0;
+    /* Padding moved to header/body */
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     transition: all 0.2s ease;
     cursor: default;
     position: relative;
+    overflow: hidden;
 }
 
 .rd-item:hover {
@@ -215,11 +219,75 @@
 .rd-item-name {
     font-weight: 500;
     color: var(--text-main);
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
     text-overflow: ellipsis;
     margin-bottom: 0.25rem;
+    line-height: 1.3;
+    font-size: 0.95rem;
 }
+
+/* File List Expansion */
+.rd-file-list {
+    margin-top: 1rem;
+    background: var(--bg-input);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem;
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+}
+
+.rd-file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.rd-file-item:last-child {
+    border-bottom: none;
+}
+
+.rd-file-name {
+    color: var(--text-muted);
+}
+
+.rd-file-item.downloaded .rd-file-name {
+    color: var(--text-main);
+}
+
+.rd-file-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.rd-btn-icon {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.2s;
+    padding: 2px;
+}
+
+.rd-btn-icon:hover {
+    color: var(--accent-primary);
+}
+
+.rd-btn-icon.add {
+    color: #60a5fa;
+}
+
+.rd-btn-icon.check {
+    color: #34d399;
+    cursor: default;
+}
+
 
 .rd-item-meta {
     display: flex;
@@ -281,6 +349,22 @@
 }
 
 /* --- Find New Overlay --- */
+.rd-item-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    cursor: pointer;
+    padding: 1rem;
+    width: 100%;
+}
+
+/* File List Container */
+.rd-item-body {
+    padding: 0 1rem 1rem 1rem;
+    border-top: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.2);
+}
+
 .fn-overlay {
     position: fixed;
     inset: 0;

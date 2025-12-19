@@ -5,6 +5,7 @@ import { AppProvider, useApp } from "./context/AppContext";
 import { AppStateProvider } from "./context/AppStateContext";
 import { Layout } from "./components/Layout";
 import { AppView, ModelConfig, DownloadTask } from "./types";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 
 // Pages
@@ -37,7 +38,7 @@ function AppContent() {
 
   // Python Setup State (from Context)
   const {
-    showPythonSetup,
+    showPythonSetup, setShowPythonSetup,
     isInitializing, setIsInitializing,
     setupProgressPercent, setSetupProgressPercent,
     setupMessage, setSetupMessage,
@@ -88,62 +89,107 @@ function AppContent() {
   };
 
   useEffect(() => {
+    let isMounted = true;
+    const timeoutId = setTimeout(() => {
+      if (isMounted) {
+        console.warn("Initialization timeout reached. Forcing splash screen hide.");
+        setIsInitializing(false);
+        setShowPythonSetup(false);
+      }
+    }, 12000); // 12 second safety cap
+
     const unlistenLog = listen("log", (event) => {
-      addLogMessage(`TAURI_BACKEND: ${event.payload as string}`);
+      if (isMounted) addLogMessage(`TAURI_BACKEND: ${event.payload as string}`);
     });
 
     const unlistenProgress = listen<{ id: string, progress: number }>("download_progress", (event) => {
-      updateDownloadTask(event.payload.id, { progress: event.payload.progress, status: 'downloading' });
+      if (isMounted) updateDownloadTask(event.payload.id, { progress: event.payload.progress, status: 'downloading' });
     });
 
     const unlistenStatus = listen<{ id: string, status: DownloadTask['status'] }>("download_status", (event) => {
       const { id, status } = event.payload;
-      if (status === 'completed') {
-        updateDownloadTask(id, { progress: 100, status: 'completed' });
-      } else if (status === 'error' || status === 'cancelled') {
-        updateDownloadTask(id, { status });
+      if (isMounted) {
+        if (status === 'completed') {
+          updateDownloadTask(id, { progress: 100, status: 'completed' });
+        } else if (status === 'error' || status === 'cancelled') {
+          updateDownloadTask(id, { status });
+        }
       }
     });
 
     const unlistenSetup = listen<{ step: string, message: string, progress: number, loaded?: number, total?: number }>("setup_progress", (event) => {
-      setSetupProgressPercent(event.payload.progress);
-      if (event.payload.message) setSetupMessage(event.payload.message);
-      if (event.payload.loaded !== undefined) setSetupLoadedBytes(event.payload.loaded);
-      if (event.payload.total !== undefined) setSetupTotalBytes(event.payload.total);
+      if (isMounted) {
+        setSetupProgressPercent(event.payload.progress);
+        if (event.payload.message) setSetupMessage(event.payload.message);
+        if (event.payload.loaded !== undefined) setSetupLoadedBytes(event.payload.loaded);
+        if (event.payload.total !== undefined) setSetupTotalBytes(event.payload.total);
+      }
     });
 
     const initializeApp = async () => {
       try {
         const configs: ModelConfig[] = await invoke("load_model_configs_command");
-        if (configs.length > 0) {
+        if (isMounted && configs.length > 0) {
           setSelectedModelConfig(configs[0]);
         }
       } catch (error) {
-        addLogMessage(`ERROR loading configs: ${error}`);
+        if (isMounted) addLogMessage(`ERROR loading configs: ${error}`);
       }
     };
 
-    const checkPython = async () => {
+    const checkEnvironment = async () => {
       try {
-        setSetupMessage("Verifying Python Environment...");
-        const isInstalled = await invoke<boolean>('check_python_installed_command');
-        if (!isInstalled) {
-          setSetupMessage("Environment missing or broken. Starting setup...");
+        if (isMounted) setSetupMessage("Verifying Environment...");
+
+        // 1. Check Python Dependencies
+        const isPythonReady = await invoke<boolean>('check_python_installed_command');
+        if (!isPythonReady && isMounted) {
+          setSetupMessage("Python Environment incomplete. Auto-repairing...");
           await runGlobalSetup(true);
-          addNotification("Setup complete!", "success");
+          if (isMounted) addNotification("Python Environment Repaired!", "success");
         }
+
+        // 2. Check Llama Binary & Updates
+        if (isMounted) setSetupMessage("Checking Inference Engine...");
+        const isLlamaReady = await invoke<boolean>('check_llama_binary_command');
+        if (!isLlamaReady && isMounted) {
+          setSetupMessage("Updating Inference Engine...");
+          setSetupProgressPercent(0);
+          await invoke('download_llama_binary_command');
+          if (isMounted) {
+            setSetupProgressPercent(100);
+            addNotification("Inference Engine Updated!", "success");
+          }
+        }
+
+        if (isMounted) {
+          setSetupProgressPercent(100);
+          setSetupMessage("SYSTEM_READY");
+        }
+
       } catch (error) {
-        addLogMessage(`Python check error: ${error}`);
-        addNotification(`Setup failed: ${error}`, "error");
+        if (isMounted) {
+          addLogMessage(`Environment check error: ${error}`);
+          addNotification(`Startup Setup Failed: ${error}`, "error");
+          // Even on error, we should eventually allow the user into the app
+          setSetupProgressPercent(100);
+        }
       } finally {
-        setIsInitializing(false);
+        if (isMounted) {
+          // We don't hide immediately here, we let the SplashOverlay 
+          // animation finish and call onSplashComplete, but the 
+          // safety timeout above ensures it's hidden regardless.
+          clearTimeout(timeoutId);
+        }
       }
     };
 
     initializeApp();
-    checkPython();
+    checkEnvironment();
 
     return () => {
+      isMounted = false;
+      clearTimeout(timeoutId);
       unlistenLog.then((f) => f());
       unlistenProgress.then(f => f());
       unlistenStatus.then(f => f());
@@ -175,6 +221,10 @@ function AppContent() {
       setupMessage={setupMessage}
       setupLoadedBytes={setupLoadedBytes}
       setupTotalBytes={setupTotalBytes}
+      onSplashComplete={() => {
+        setIsInitializing(false);
+        setShowPythonSetup(false);
+      }}
     >
       {/* Global Notifications - Premium styled */}
       <div style={{ position: 'fixed', top: '96px', right: '24px', zIndex: 100, display: 'flex', flexDirection: 'column', gap: '12px', pointerEvents: 'none' }}>
@@ -242,11 +292,13 @@ function AppContent() {
 
       {/* Content */}
       {currentView === AppView.Dashboard && (
-        <ResourceDashboard
-          addLogMessage={addLogMessage}
-          addNotification={addNotification}
-          setDownloadTasks={setDownloadTasks}
-        />
+        <ErrorBoundary>
+          <ResourceDashboard
+            addLogMessage={addLogMessage}
+            addNotification={addNotification}
+            setDownloadTasks={setDownloadTasks}
+          />
+        </ErrorBoundary>
       )}
 
       {currentView === AppView.Utilities && (

@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { Select } from './components/Select';
 import './styles/legacy.css';
 
 interface UtilitiesPanelProps {
@@ -165,18 +166,16 @@ const UtilitiesPanel: React.FC<UtilitiesPanelProps> = ({ addLogMessage, addNotif
                 <div className="input-group">
                   <label>Source HF Model</label>
                   <div className="file-input-group">
-                    <select
-                      className="input-field"
+                    <Select
+                      style={{ flex: 1 }}
                       value={sourcePath}
-                      onChange={(e) => setSourcePath(e.target.value)}
-                    >
-                      <option value="">Select a model...</option>
-                      {availableModels.map(model => (
-                        <option key={model} value={`data/models/${model}`}>
-                          {model}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setSourcePath(val)}
+                      placeholder="Select a model..."
+                      options={[
+                        { value: '', label: 'Select a model...' },
+                        ...availableModels.map(model => ({ value: `data/models/${model}`, label: model }))
+                      ]}
+                    />
                     <button className="btn-secondary" onClick={handleBrowseSource}>
                       Browse
                     </button>
@@ -188,18 +187,16 @@ const UtilitiesPanel: React.FC<UtilitiesPanelProps> = ({ addLogMessage, addNotif
                 <div className="input-group">
                   <label>Source LoRA</label>
                   <div className="file-input-group">
-                    <select
-                      className="input-field"
+                    <Select
+                      style={{ flex: 1 }}
                       value={sourcePath}
-                      onChange={(e) => setSourcePath(e.target.value)}
-                    >
-                      <option value="">Select a LoRA...</option>
-                      {availableLoras.map(lora => (
-                        <option key={lora} value={`data/loras/${lora}`}>
-                          {lora}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setSourcePath(val)}
+                      placeholder="Select a LoRA..."
+                      options={[
+                        { value: '', label: 'Select a LoRA...' },
+                        ...availableLoras.map(lora => ({ value: `data/loras/${lora}`, label: lora }))
+                      ]}
+                    />
                     <button className="btn-secondary" onClick={handleBrowseSource}>
                       Browse
                     </button>
@@ -209,18 +206,16 @@ const UtilitiesPanel: React.FC<UtilitiesPanelProps> = ({ addLogMessage, addNotif
                 <div className="input-group">
                   <label>Base Model (for LoRA conversion)</label>
                   <div className="file-input-group">
-                    <select
-                      className="input-field"
+                    <Select
+                      style={{ flex: 1 }}
                       value={basePath}
-                      onChange={(e) => setBasePath(e.target.value)}
-                    >
-                      <option value="">Select base model...</option>
-                      {availableModels.map(model => (
-                        <option key={model} value={`data/models/${model}`}>
-                          {model}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setBasePath(val)}
+                      placeholder="Select base model..."
+                      options={[
+                        { value: '', label: 'Select base model...' },
+                        ...availableModels.map(model => ({ value: `data/models/${model}`, label: model }))
+                      ]}
+                    />
                     <button className="btn-secondary" onClick={handleBrowseBase}>
                       Browse
                     </button>
@@ -231,15 +226,15 @@ const UtilitiesPanel: React.FC<UtilitiesPanelProps> = ({ addLogMessage, addNotif
 
             <div className="input-group">
               <label>Quantization Type</label>
-              <select
-                className="input-field"
+              <Select
                 value={quantizationType}
-                onChange={(e) => setQuantizationType(e.target.value as 'q8_0' | 'f16' | 'bf16')}
-              >
-                <option value="q8_0">q8_0 (8-bit integer)</option>
-                <option value="f16">f16 (16-bit float)</option>
-                <option value="bf16">bf16 (bfloat16)</option>
-              </select>
+                onChange={(val) => setQuantizationType(val as 'q8_0' | 'f16' | 'bf16')}
+                options={[
+                  { value: 'q8_0', label: 'q8_0 (8-bit integer)' },
+                  { value: 'f16', label: 'f16 (16-bit float)' },
+                  { value: 'bf16', label: 'bf16 (bfloat16)' }
+                ]}
+              />
             </div>
 
             <div className="input-group">

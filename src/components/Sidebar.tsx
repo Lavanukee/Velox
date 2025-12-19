@@ -142,12 +142,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                 ))}
             </nav>
 
+            {/* Downloads Section */}
+            {!isCollapsed && (
+                <SidebarDownloads tasks={downloadTasks} isCollapsed={isCollapsed} />
+            )}
+            {isCollapsed && downloadTasks.length > 0 && (
+                <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                    <SidebarDownloads tasks={downloadTasks} isCollapsed={isCollapsed} />
+                </div>
+            )}
+
             {/* Settings */}
             <div
                 className="p-3 border-t border-white/5"
                 style={{
                     padding: isCollapsed ? '12px 8px' : '12px',
-                    borderTop: '1px solid rgba(255, 255, 255, 0.05)'
+                    borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                    marginTop: 'auto' // Ensure it stays at bottom even if nav is short, though flex-1 on nav handles this. Added for safety.
                 }}
             >
                 <button
@@ -182,16 +193,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                     {!isCollapsed && <span>Settings</span>}
                 </button>
             </div>
-
-            {/* Downloads Section */}
-            {!isCollapsed && (
-                <SidebarDownloads tasks={downloadTasks} isCollapsed={isCollapsed} />
-            )}
-            {isCollapsed && downloadTasks.length > 0 && (
-                <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
-                    <SidebarDownloads tasks={downloadTasks} isCollapsed={isCollapsed} />
-                </div>
-            )}
         </aside>
     );
 };

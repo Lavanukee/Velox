@@ -1,14 +1,29 @@
-import React, { useState, useEffect } from 'react';
+
+import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-shell';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { appDataDir } from '@tauri-apps/api/path';
 import { listen } from '@tauri-apps/api/event';
 import { useApp } from '../context/AppContext';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
-import { Input, Select } from '../components/Input';
+import { Input } from '../components/Input';
+import { Select } from '../components/Select';
 
-import { BrainCircuit, Database, Play, Square, Download, FolderOpen, Activity, Terminal } from 'lucide-react';
+import {
+    BrainCircuit,
+    Play,
+    Square,
+    Download,
+    FolderOpen,
+    Activity,
+    Terminal,
+    Minus,
+    Plus,
+    ExternalLink,
+    Database
+} from 'lucide-react'; // Modified lucide-react imports
 
 interface FineTuningPageProps {
     addLogMessage: (message: string) => void;
@@ -43,6 +58,35 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
     // Resources
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [availableDatasets, setAvailableDatasets] = useState<string[]>([]);
+
+    // UI Local State
+    const [tbZoom, setTbZoom] = useState(1);
+
+    // --- Event Listeners ---
+    useEffect(() => {
+        // Monitor Setup Progress
+        const u1 = listen('setup_progress', (_) => {
+            // Ignoring setup progress for now
+        });
+
+        // Monitor Training Finish
+        const u2 = listen('training_finished', (event: any) => {
+            const { success, code } = event.payload;
+            setIsTraining(false);
+            setTrainingStatus('idle');
+
+            if (success) {
+                addNotification("Training Completed Successfully!", 'success');
+            } else {
+                addNotification(`Training Failed (Exit Code: ${code}). Check logs.`, 'error');
+            }
+        });
+
+        return () => {
+            u1.then(f => f());
+            u2.then(f => f());
+        };
+    }, []);
     const [existingProjects, setExistingProjects] = useState<string[]>([]);
 
     // HF Downloads
@@ -82,7 +126,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             setAvailableDatasets(datasets);
             setExistingProjects(projects);
         } catch (error) {
-            addLogMessage(`ERROR loading resources: ${error}`);
+            addLogMessage(`ERROR loading resources: ${error} `);
         }
     };
 
@@ -96,7 +140,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             loadResources();
         } catch (error) {
             addNotification('Model download failed', 'error');
-            addLogMessage(`Download error: ${error}`);
+            addLogMessage(`Download error: ${error} `);
         } finally {
             setIsDownloadingModel(false);
         }
@@ -112,7 +156,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             loadResources();
         } catch (error) {
             addNotification('Dataset download failed', 'error');
-            addLogMessage(`Download error: ${error}`);
+            addLogMessage(`Download error: ${error} `);
         } finally {
             setIsDownloadingDataset(false);
         }
@@ -120,7 +164,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
 
     const handleBrowseDataset = async () => {
         try {
-            const selected = await open({
+            const selected = await openDialog({
                 multiple: false,
                 directory: true,
                 defaultPath: await appDataDir(),
@@ -361,7 +405,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                             ...availableModels.map(m => ({ value: m, label: m }))
                                         ]}
                                         value={selectedModel}
-                                        onChange={(e) => setSelectedModel(e.target.value)}
+                                        onChange={(val) => setSelectedModel(val)}
                                     />
                                 ) : (
                                     <div className="flex gap-2">
@@ -467,7 +511,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                             ...availableDatasets.map(d => ({ value: d, label: d }))
                                         ]}
                                         value={selectedDataset}
-                                        onChange={(e) => setSelectedDataset(e.target.value)}
+                                        onChange={(val) => setSelectedDataset(val)}
                                     />
                                 ) : hfDatasetId ? (
                                     <div className="flex gap-2">
@@ -528,7 +572,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                             ...existingProjects.map(p => ({ value: p, label: p }))
                                         ]}
                                         value={existingProjects.includes(ftProjectName) ? ftProjectName : ''}
-                                        onChange={(e) => setFtProjectName(e.target.value)}
+                                        onChange={(val) => setFtProjectName(val)}
                                     />
                                     <div className="relative my-3">
                                         <div className="absolute inset-0 flex items-center">
@@ -545,6 +589,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                 placeholder="e.g., my-custom-model"
                                 value={ftProjectName}
                                 onChange={(e) => setFtProjectName(e.target.value)}
+                                tooltip="Unique identifier for this training run. Saves all checkpoints and logs here."
                             />
                             <p className="text-xs text-gray-500 mt-2">
                                 All checkpoints and outputs will be saved under this project name
@@ -563,12 +608,14 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                     type="number"
                                     value={numEpochs}
                                     onChange={(e) => setNumEpochs(Number(e.target.value))}
+                                    tooltip="Number of times to iterate over the entire dataset."
                                 />
                                 <Input
                                     label="Batch Size"
                                     type="number"
                                     value={batchSize}
                                     onChange={(e) => setBatchSize(Number(e.target.value))}
+                                    tooltip="Total number of samples processed per gradient update."
                                 />
 
                                 {userMode === 'power' && (
@@ -579,24 +626,28 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                             step="0.00001"
                                             value={learningRate}
                                             onChange={(e) => setLearningRate(Number(e.target.value))}
+                                            tooltip="Step size for model updates. Too high can cause instability, too low is slow."
                                         />
                                         <Input
                                             label="Max Seq Length"
                                             type="number"
                                             value={maxSeqLength}
                                             onChange={(e) => setMaxSeqLength(Number(e.target.value))}
+                                            tooltip="Maximum number of tokens the model processes at once (Context Window)."
                                         />
                                         <Input
                                             label="LoRA R"
                                             type="number"
                                             value={loraR}
                                             onChange={(e) => setLoraR(Number(e.target.value))}
+                                            tooltip="The rank of the low-rank adapters. Higher values increase model capacity but use more memory."
                                         />
                                         <Input
                                             label="LoRA Alpha"
                                             type="number"
                                             value={loraAlpha}
                                             onChange={(e) => setLoraAlpha(Number(e.target.value))}
+                                            tooltip="Scaling factor for LoRA weights. Common practice is to set it to 2x the Rank."
                                         />
                                     </>
                                 )}
@@ -627,11 +678,11 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             )}
 
             {activeTab === 'training' && (
-                <div className="h-[70vh] flex flex-col gap-4" style={{ height: '70vh', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="flex-1 flex flex-col gap-4" style={{ height: 'calc(100vh - 180px)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     <div className="flex justify-between items-center p-4 rounded-lg border" style={{
                         background: 'linear-gradient(135deg, rgba(28, 28, 36, 0.6) 0%, rgba(30, 28, 38, 0.6) 100%)',
                         padding: '16px',
-                        borderRadius: '12px',
+                        borderRadius: '16px',
                         border: '1px solid rgba(167, 139, 250, 0.2)'
                     }}>
                         <div className="flex items-center gap-3">
@@ -656,25 +707,57 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                         )}
                     </div>
 
+
                     {tensorboardUrl && trainingStatus === 'training' ? (
-                        <iframe
-                            src={tensorboardUrl}
-                            className="flex-1 w-full rounded-lg border"
-                            style={{
-                                flex: 1,
-                                width: '100%',
-                                borderRadius: '12px',
-                                border: '1px solid rgba(167, 139, 250, 0.3)',
-                                background: '#1a1a1f',
-                                minHeight: '500px'
-                            }}
-                        />
+                        <div className="flex-1 flex flex-col rounded-2xl border border-white/10 overflow-hidden bg-[#1a1a1f] shadow-2xl">
+                            {/* TB Header Controls */}
+                            <div className="flex items-center justify-between px-3 py-2 bg-black/20 border-b border-white/5">
+                                <span className="text-xs font-medium text-gray-400">TensorBoard Metrics</span>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => setTbZoom(z => Math.max(0.5, z - 0.1))}
+                                        className="p-1 hover:bg-white/10 rounded" title="Zoom Out"
+                                    >
+                                        <Minus size={14} />
+                                    </button>
+                                    <span className="text-xs text-gray-500 w-8 text-center">{Math.round(tbZoom * 100)}%</span>
+                                    <button
+                                        onClick={() => setTbZoom(z => Math.min(2.0, z + 0.1))}
+                                        className="p-1 hover:bg-white/10 rounded" title="Zoom In"
+                                    >
+                                        <Plus size={14} />
+                                    </button>
+                                    <div className="h-4 w-[1px] bg-white/10 mx-1" />
+                                    <button
+                                        onClick={() => open(tensorboardUrl)}
+                                        className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 px-2 py-1 hover:bg-white/5 rounded transition-colors"
+                                    >
+                                        <ExternalLink size={12} />
+                                        Open
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Iframe Container */}
+                            <div className="flex-1 w-full bg-[#1a1a1f] overflow-hidden relative" style={{ minHeight: '600px' }}>
+                                <iframe
+                                    src={tensorboardUrl}
+                                    className="w-full h-full border-none"
+                                    style={{
+                                        transform: `scale(${tbZoom})`,
+                                        transformOrigin: 'top left',
+                                        width: `${100 / tbZoom}%`,
+                                        height: `${100 / tbZoom}%`,
+                                    }}
+                                />
+                            </div>
+                        </div>
                     ) : (
                         <div
-                            className="flex-1 flex items-center justify-center border border-dashed rounded-lg"
+                            className="flex-1 flex items-center justify-center border border-dashed rounded-2xl"
                             style={{
                                 borderColor: 'rgba(167, 139, 250, 0.2)',
-                                borderRadius: '12px',
+                                borderRadius: '16px',
                                 background: 'linear-gradient(135deg, rgba(28, 28, 36, 0.3) 0%, rgba(30, 28, 38, 0.3) 100%)'
                             }}
                         >

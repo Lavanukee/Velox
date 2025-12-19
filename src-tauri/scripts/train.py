@@ -536,19 +536,46 @@ def main(args):
                     
             # Default Alpaca-style formatting if no template specified or fallback
             if "text" not in dataset.column_names: 
-                print("Using default Alpaca-style formatting...")
+                print("Using default formatting logic...")
+                
                 def format_text(examples):
+                    # ShareGPT style
+                    if "conversations" in examples:
+                        convos = examples["conversations"]
+                        texts = []
+                        # convos is list of lists of dicts if batched, or list of dicts if not?
+                        # If batched=False, examples is a dict of values. examples['conversations'] is the list of messages.
+                        # If batched=False:
+                        if isinstance(convos, list) and len(convos) > 0 and isinstance(convos[0], dict):
+                             # Single example processing (if mapped with batched=False)
+                             # Construct text from conversation
+                             c_text = ""
+                             for msg in convos:
+                                 role = msg.get("role", "")
+                                 content = msg.get("content", "")
+                                 c_text += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+                             c_text += "<|im_start|>assistant\n" # Generation prompt?
+                             return {"text": c_text}
+                        
+                        # If mapped with batched=True? The code below uses batched=False for this fallback
+                        return examples
+
+                    # Alpaca style
                     if "instruction" in examples and "output" in examples:
                         inst = examples["instruction"]
                         inp = examples.get("input", "")
                         out = examples["output"]
                         text = f"Instruction: {inst}\nInput: {inp}\nOutput: {out}" if inp else f"Instruction: {inst}\nOutput: {out}"
                         return {"text": text}
+                        
                     return examples
             
                 dataset = dataset.map(format_text, batched=False)
                 
-            print(f"✓ Dataset formatted. Sample: {dataset[0]['text'][:100]}...")
+            if "text" in dataset.column_names:
+                print(f"✓ Dataset formatted. Sample: {dataset[0]['text'][:100]}...")
+            else:
+                print("Warning: Dataset could not be formatted. 'text' column missing. Columns found:", dataset.column_names)
             
     # ------------------------------------------------------------------------
     # TRAINING ARGUMENTS

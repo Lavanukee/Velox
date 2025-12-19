@@ -36,4 +36,5 @@ bytes = "1"
 flate2 = "1.0"  # For decompressing .tar.gz files
 tar = "0.4"     # For extracting .tar archives
 tauri = { version = "2.0.0", features = [] } # Ensure you are on v2 based on your config
+tokio-stream = { version = "0.1.17", features = ["fs", "io-util"] }
 

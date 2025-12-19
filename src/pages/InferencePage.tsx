@@ -5,7 +5,7 @@ import { useApp } from '../context/AppContext';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
-import { Canvas } from '../components/Canvas';
+import { CanvasPanel } from '../components/CanvasPanel';
 import ToolCreatorModal from '../components/ToolCreatorModal';
 import { Select } from '../components/Select';
 import {
@@ -14,8 +14,8 @@ import {
     Loader2, CheckCircle2, XCircle, Power, Paperclip, X,
     Settings, Wrench, BarChart2, Clock, PenTool, Search, Code, Brain, Activity
 } from 'lucide-react';
+import type { Option } from '../components/Select';
 
-// ThinkingBlock component for COT models
 const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
     const [expanded, setExpanded] = useState(false);
     return (
@@ -60,15 +60,148 @@ const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
     );
 };
 
-// Parse message content for <think> tags
-const parseMessageContent = (text: string): { thinking: string | null; response: string } => {
-    const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/i);
-    if (thinkMatch) {
-        const thinking = thinkMatch[1].trim();
-        const response = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-        return { thinking, response };
+const ToolCallBlock: React.FC<{ content: string }> = ({ content }) => {
+    const [expanded, setExpanded] = useState(false);
+    // Extract tool name if possible
+    const nameMatch = content.match(/<name>([\s\S]*?)<\/name>/i);
+    const toolName = nameMatch ? nameMatch[1].trim() : 'Tool Call';
+
+    return (
+        <div style={{ marginBottom: '12px' }}>
+            <button
+                onClick={() => setExpanded(!expanded)}
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    background: 'rgba(59,130,246,0.15)',
+                    border: '1px solid rgba(59,130,246,0.3)',
+                    borderRadius: '8px',
+                    color: '#60a5fa',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    width: '100%',
+                    textAlign: 'left'
+                }}
+            >
+                <Wrench size={14} />
+                <span style={{ flex: 1 }}>Calling Tool: <strong>{toolName}</strong></span>
+                <ChevronDown size={14} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+            </button>
+            {expanded && (
+                <div style={{
+                    marginTop: '8px',
+                    padding: '12px',
+                    background: 'rgba(0,0,0,0.3)',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    color: '#34d399', // Greenish for code/args
+                    lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap',
+                    borderLeft: '3px solid rgba(59,130,246,0.5)',
+                    fontFamily: 'monospace'
+                }}>
+                    {content}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ToolResultBlock: React.FC<{ content: string }> = ({ content }) => {
+    const [expanded, setExpanded] = useState(false);
+    return (
+        <div style={{ marginBottom: '12px' }}>
+            <button
+                onClick={() => setExpanded(!expanded)}
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    background: 'rgba(16,185,129,0.15)',
+                    border: '1px solid rgba(16,185,129,0.3)',
+                    borderRadius: '8px',
+                    color: '#34d399',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    width: '100%',
+                    textAlign: 'left'
+                }}
+            >
+                <CheckCircle2 size={14} />
+                <span style={{ flex: 1 }}>Tool Result</span>
+                <ChevronDown size={14} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+            </button>
+            {expanded && (
+                <div style={{
+                    marginTop: '8px',
+                    padding: '12px',
+                    background: 'rgba(0,0,0,0.3)',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    color: '#e5e7eb',
+                    lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap',
+                    borderLeft: '3px solid rgba(16,185,129,0.5)'
+                }}>
+                    {content}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// Parse message content for various tags
+type ContentBlock =
+    | { type: 'text'; content: string }
+    | { type: 'thinking'; content: string }
+    | { type: 'tool_call'; content: string }
+    | { type: 'tool_result'; content: string };
+
+const parseMessageContentBlocks = (text: string): ContentBlock[] => {
+    const blocks: ContentBlock[] = [];
+
+    // Combined regex for all tags
+    // Matches <think>...</think>, <tool_call>...</tool_call>, <tool_result>...</tool_result>
+    const tagRegex = /<(think|tool_call|tool_result)>([\s\S]*?)<\/\1>/gi;
+
+    let match;
+    let lastIndex = 0;
+
+    while ((match = tagRegex.exec(text)) !== null) {
+        // Add text before the tag
+        const textBefore = text.slice(lastIndex, match.index).trim();
+        if (textBefore) {
+            blocks.push({ type: 'text', content: textBefore });
+        }
+
+        const tagName = match[1].toLowerCase();
+        const content = match[2].trim();
+
+        if (tagName === 'think') {
+            blocks.push({ type: 'thinking', content });
+        } else if (tagName === 'tool_call') {
+            blocks.push({ type: 'tool_call', content });
+        } else if (tagName === 'tool_result') {
+            blocks.push({ type: 'tool_result', content });
+        }
+
+        lastIndex = tagRegex.lastIndex;
     }
-    return { thinking: null, response: text };
+
+    // Add remaining text
+    const textAfter = text.slice(lastIndex).trim();
+    if (textAfter) {
+        blocks.push({ type: 'text', content: textAfter });
+    }
+
+    if (blocks.length === 0 && text.trim()) {
+        blocks.push({ type: 'text', content: text });
+    }
+
+    return blocks;
 };
 
 interface InferencePageProps {
@@ -112,6 +245,10 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         infEnableWebSearch, setInfEnableWebSearch,
         infEnableCodeExec, setInfEnableCodeExec,
         infEnableCanvas, setInfEnableCanvas,
+        infCanvasVisible, setInfCanvasVisible,
+        infCanvasArtifacts, setInfCanvasArtifacts,
+        infAutoFit, setInfAutoFit,
+        infInferenceEngine, setInfInferenceEngine,
     } = useApp();
 
     const [showTools, setShowTools] = useState(false);
@@ -119,7 +256,7 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     // Resources
-    const [availableGGUFModels, setAvailableGGUFModels] = useState<string[]>([]);
+    const [modelOptions, setModelOptions] = useState<Option[]>([]);
     const [projectLoras, setProjectLoras] = useState<ProjectLoraInfo[]>([]);
     const [selectedProject, setSelectedProject] = useState('');
     const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
@@ -137,16 +274,8 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         eval_time_ms: number;
         total_tokens: number;
     } | null>(null);
-    const [canvasContent, setCanvasContent] = useState('');
-    const [canvasMode, setCanvasMode] = useState<'code' | 'markdown' | 'mermaid'>('code');
-    const [canvasStreamingEdit, setCanvasStreamingEdit] = useState<{
-        startLine: number;
-        endLine: number;
-        newContent: string;
-        isActive: boolean;
-        buffer: string; // accumulated content for current tag
-        tagName: string | null;
-    }>({ startLine: 0, endLine: 0, newContent: '', isActive: false, buffer: '', tagName: null });
+    // Streaming artifact tracking
+    const streamingArtifactId = useRef<string | null>(null);
 
     // Vision
     const [pendingImage, setPendingImage] = useState<string | null>(null);
@@ -158,23 +287,82 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
 
     const [showToolCreator, setShowToolCreator] = useState(false);
 
-    // Check and download inference engine if missing
+    // Layout Resizing
+    const [lastLoadedModel, setLastLoadedModel] = useState<string>(''); // Track what's actually running
+    const [canvasWidth, setCanvasWidth] = useState(450);
+    const [settingsWidth, setSettingsWidth] = useState(320);
+    const [isResizingCanvas, setIsResizingCanvas] = useState(false);
+    const [isResizingSettings, setIsResizingSettings] = useState(false);
+
+    // Refs for event handlers to access current state without re-binding
+    const stateRef = React.useRef({
+        canvasWidth,
+        settingsWidth,
+        showSidebar,
+        isResizingCanvas,
+        isResizingSettings
+    });
+
+    // Update refs when state changes
     useEffect(() => {
-        const checkBinary = async () => {
-            try {
-                const exists: boolean = await invoke('check_llama_binary_command');
-                if (!exists) {
-                    addLogMessage('Inference engine not found. Downloading...');
-                    await invoke('download_llama_binary_command');
-                    addLogMessage('Inference engine installed successfully.');
+        stateRef.current = {
+            canvasWidth,
+            settingsWidth,
+            showSidebar,
+            isResizingCanvas,
+            isResizingSettings
+        };
+    }, [canvasWidth, settingsWidth, showSidebar, isResizingCanvas, isResizingSettings]);
+
+    // Handle resizing
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            const { isResizingSettings, isResizingCanvas, showSidebar, settingsWidth } = stateRef.current;
+
+            if (isResizingSettings) {
+                // Settings is on the right. Width = WindowWidth - MouseX
+                const newWidth = window.innerWidth - e.clientX;
+                if (newWidth > 250 && newWidth < 600) {
+                    setSettingsWidth(newWidth);
                 }
-            } catch (error) {
-                addLogMessage(`Error checking/downloading inference engine: ${error}`);
+            } else if (isResizingCanvas) {
+                // Canvas is middle.
+                const rightEdge = window.innerWidth - (showSidebar ? settingsWidth : 0);
+                const newWidth = rightEdge - e.clientX;
+                if (newWidth > 300 && newWidth < 1200) {
+                    setCanvasWidth(newWidth);
+                }
             }
         };
-        checkBinary();
+
+        const handleMouseUp = () => {
+            setIsResizingCanvas(false);
+            setIsResizingSettings(false);
+            document.body.style.cursor = 'default';
+        };
+
+        if (isResizingCanvas || isResizingSettings) {
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        }
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+            document.body.style.cursor = 'default';
+            document.body.style.userSelect = 'auto';
+        };
+    }, [isResizingCanvas, isResizingSettings]);
+
+
+    // Re-load resources when engine changes
+    useEffect(() => {
         loadResources();
-    }, []);
+        // Do not reset detected model here, let Context persist it.
+        // If the model is invalid for the new engine, the user can select a new one.
+    }, [infInferenceEngine]);
 
     // Max GPU Layers (Dynamic)
     const [maxGpuLayers, setMaxGpuLayers] = useState(200);
@@ -222,49 +410,44 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
 
                         // --- Canvas Parsing Logic ---
                         if (infEnableCanvas) {
-                            // Check for content creation
-                            const contentMatch = /<canvas_content.*?type="(.*?)".*?>(.*)/s.exec(fullText);
+                            // Check for canvas content
+                            const contentMatch = /<canvas_content type="(code|markdown|mermaid)"(?: language="(.*?)")?>(.*)/s.exec(fullText);
                             if (contentMatch) {
-                                // If we have a closing tag, use content up to it, otherwise use all content
-                                const closingMatch = /(.*?)<\/canvas_content>/s.exec(contentMatch[2]);
-                                const content = closingMatch ? closingMatch[1] : contentMatch[2];
-                                setCanvasContent(content);
                                 const type = contentMatch[1] as any;
-                                if (['code', 'markdown', 'mermaid'].includes(type)) {
-                                    setCanvasMode(type);
-                                }
+                                const language = contentMatch[2];
+                                // Check if we have closing tag yet
+                                const closingMatch = /(.*?)<\/canvas_content>/s.exec(contentMatch[3]);
+                                const content = closingMatch ? closingMatch[1] : contentMatch[3];
+
+                                setInfCanvasArtifacts(prev => {
+                                    // If streamingArtifactId is null, create new
+                                    if (!streamingArtifactId.current) {
+                                        const newId = `artifact-${Date.now()}`;
+                                        streamingArtifactId.current = newId;
+                                        setInfCanvasVisible(true);
+                                        return [...prev, {
+                                            id: newId,
+                                            title: 'Generated Content',
+                                            mode: type,
+                                            language: language,
+                                            content: content,
+                                            createdAt: Date.now()
+                                        }];
+                                    }
+
+                                    // Update existing
+                                    return prev.map(a => a.id === streamingArtifactId.current ? {
+                                        ...a,
+                                        content: content,
+                                        mode: type,
+                                        language: language
+                                    } : a);
+                                });
                             }
 
-                            // Check for edits
-                            const editMatch = /<canvas_edit>(.*)/s.exec(fullText);
-                            if (editMatch) {
-                                const editBody = editMatch[1];
-                                const hasClose = /<\/canvas_edit>/.test(editBody);
-
-                                const startLineM = /<start_line>(\d+)<\/start_line>/.exec(editBody);
-                                const endLineM = /<end_line>(\d+)<\/end_line>/.exec(editBody);
-                                const newContentM = /<new_content>(.*)/s.exec(editBody);
-
-                                if (startLineM && endLineM && newContentM) {
-                                    // If we have closing new_content tag
-                                    const contentClose = /(.*?)<\/new_content>/s.exec(newContentM[1]);
-                                    const rawNewContent = contentClose ? contentClose[1] : newContentM[1];
-
-                                    setCanvasStreamingEdit({
-                                        isActive: true, // Always valid if tags exist
-                                        startLine: parseInt(startLineM[1]),
-                                        endLine: parseInt(endLineM[1]),
-                                        newContent: rawNewContent.trim(), // Trim strictly? Maybe not for code indentation
-                                        buffer: '',
-                                        tagName: null
-                                    });
-                                }
-
-                                if (hasClose) {
-                                    // Reset active edit state slightly after completion or keep it? 
-                                    // Keeping it handles the 'final' applying.
-                                }
-                            }
+                            // Edits not yet supported in streaming for new canvas, 
+                            // as we need to match against existing content which is hard in streaming.
+                            // We rely on full replacement for now or handle edits in 'chat-stream-done' if needed.
                         }
                         // ----------------------------
 
@@ -278,6 +461,9 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
             unlistenDone = await listen('chat-stream-done', async (event: any) => {
                 const metrics = event.payload;
                 setStreamMetrics(metrics);
+
+                // Reset streaming artifact mapping
+                streamingArtifactId.current = null;
 
                 // Get the full message content
                 let fullMessage = '';
@@ -356,23 +542,34 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     }, [chatMessages]);
 
     // AUTO-START: When model changes, start server automatically
+    // Also auto-switch engine based on model type
     useEffect(() => {
         const restart = async () => {
             if (selectedBaseModel) {
-                // If running or loading (or 'ready' but switch happened), stop first
-                // Actually if 'idle', just start. If 'ready'/'loading'/'error', restart.
-                // But serverStatus might lag.
-                // Safest: always stop if status isn't idle, then start.
-                if (infServerStatus !== 'idle') {
-                    await handleStopServer();
-                    // Tiny delay to ensure port release
-                    await new Promise(r => setTimeout(r, 500));
+                // Determine correct engine based on model type
+                const selectedOption = modelOptions.find(o => o.value === selectedBaseModel);
+                const isGGUF = selectedOption?.engine === 'GGUF' || selectedBaseModel.endsWith('.gguf');
+                const correctEngine = isGGUF ? 'llamacpp' : 'transformers';
+
+                // Auto-switch engine if needed
+                if (infInferenceEngine !== correctEngine) {
+                    addLogMessage(`[AUTO] Switching engine to ${correctEngine} for ${isGGUF ? 'GGUF' : 'safetensors'} model.`);
+                    setInfInferenceEngine(correctEngine);
+                    // Engine switch triggers resource reload, server start will happen on next effect
+                    return;
                 }
-                handleStartServer(); // Start new
+
+                // Restart if model changed or server is not running
+                if (infServerStatus === 'idle' || infServerStatus === 'error' || lastLoadedModel !== selectedBaseModel) {
+                    addLogMessage(`[AUTO] Starting/Restarting server for model: ${selectedBaseModel}`);
+                    handleStartServer();
+                } else {
+                    addLogMessage(`[DEBUG] Server is already ${infServerStatus} with correct model, skipping auto-start.`);
+                }
             }
         };
         restart();
-    }, [selectedBaseModel]);
+    }, [selectedBaseModel, modelOptions, lastLoadedModel]);
 
     // Update LoRA when checkpoint changes
     useEffect(() => {
@@ -390,9 +587,27 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     const loadResources = async () => {
         try {
             const resources: any[] = await invoke('list_all_resources_command');
-            const ggufs = resources.filter(r => r.type === 'gguf');
-            setAvailableGGUFModels(ggufs.filter(r => !r.is_mmproj).map(r => r.path.replace('data/models/', '')));
-            // mmproj models filtered out for now
+
+            // Map resources to Select options with enriched data
+            const options: Option[] = resources
+                .filter(r => r.type === 'gguf' || r.type === 'model')
+                .filter(r => !r.is_mmproj) // Don't list mmproj in main list
+                .map(r => {
+                    const isGGUF = r.type === 'gguf';
+                    const name = isGGUF ? r.path.replace('data/models/', '') : r.name;
+
+                    // Check if this model has a matching mmproj (vision)
+                    const hasVision = resources.some(res => res.is_mmproj && res.path.includes(name.split('-')[0]));
+
+                    return {
+                        value: isGGUF ? r.path : name,
+                        label: isGGUF ? name : `${name} (Experimental)`,
+                        engine: isGGUF ? 'GGUF' : 'Base' as any,
+                        hasVision: hasVision
+                    };
+                });
+
+            setModelOptions(options);
 
             const projects: ProjectLoraInfo[] = await invoke('list_loras_by_project_command');
             setProjectLoras(projects);
@@ -411,27 +626,43 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     };
 
     const handleStartServer = async () => {
-        if (!selectedBaseModel) return;
+        if (!selectedBaseModel) {
+            addLogMessage('[DEBUG] handleStartServer called but no model selected.');
+            return;
+        }
+
+        addLogMessage(`[DEBUG] Starting server with engine=${infInferenceEngine}, model=${selectedBaseModel}`);
         setInfServerStatus('loading');
 
         try {
             const port = modelConfig?.serverPort || 8080;
-            // invoke start command (this spawns the process and returns immediately)
-            await invoke('start_llama_server_command', {
-                modelPath: selectedBaseModel,
-                mmprojPath: '',
-                loraPath: selectedLoraAdapter || null,
-                port: port,
-                gpuLayers: infGpuLayers,
-                ctxSize: contextSize,
-                batchSize: infBatchSize,
-                ubatchSize: infUbatchSize,
-                threads: infThreads > 0 ? infThreads : null,
-                flashAttn: infFlashAttn,
-                noMmap: infNoMmap,
-            });
+            addLogMessage(`[DEBUG] Using port ${port}`);
 
-            addLogMessage('Server process launched. Waiting for readiness...');
+            if (infInferenceEngine === 'transformers') {
+                addLogMessage('[DEBUG] Invoking start_transformers_server_command...');
+                await invoke('start_transformers_server_command', {
+                    modelPath: selectedBaseModel,
+                    port: port
+                });
+            } else {
+                addLogMessage('[DEBUG] Invoking start_llama_server_command...');
+                await invoke('start_llama_server_command', {
+                    modelPath: selectedBaseModel,
+                    mmprojPath: '',
+                    loraPath: selectedLoraAdapter || null,
+                    port: port,
+                    gpuLayers: infAutoFit ? null : infGpuLayers,
+                    ctxSize: contextSize,
+                    batchSize: infBatchSize,
+                    ubatchSize: infUbatchSize,
+                    threads: infThreads > 0 ? infThreads : null,
+                    flashAttn: infFlashAttn,
+                    noMmap: infNoMmap,
+                    autoFit: infAutoFit,
+                });
+            }
+
+            addLogMessage(`Server (${infInferenceEngine}) process launched. Waiting for readiness...`);
 
             // Poll for health
             let retries = 0;
@@ -442,35 +673,41 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
                     clearInterval(pollInterval);
                     setIsServerRunning(true);
                     setInfServerStatus('ready');
+                    setLastLoadedModel(selectedBaseModel); // Track successfully loaded model
                     addLogMessage('Server is ready and accepting requests.');
                 } else {
                     retries++;
+                    if (retries % 10 === 0) {
+                        addLogMessage(`[DEBUG] Health check attempt ${retries}/${maxRetries}...`);
+                    }
                     if (retries > maxRetries) {
                         clearInterval(pollInterval);
                         setInfServerStatus('error');
                         setIsServerRunning(false);
-                        addLogMessage('Error: Server startup timed out.');
-                        // Try to kill it?
-                        await invoke('stop_llama_server_command');
+                        addLogMessage('Error: Server startup timed out. Check logs above for backend errors.');
+                        await handleStopServer();
                     }
                 }
             }, 500);
 
         } catch (error) {
-            addLogMessage(`Error starting server: ${error}`);
+            addLogMessage(`[ERROR] Starting server failed: ${error}`);
             setInfServerStatus('error');
         }
     };
 
     const handleStopServer = async () => {
         try {
-            await invoke('stop_llama_server_command');
-            // Don't clear history automatically on stop unless desired? 
-            // User requested "loading/unloading logic can sometimes just leave no model loaded without obvious way to load".
-            // Keeping chat history intact is usually better UX.
+            // Robust handling: stop BOTH possible backend processes regardless of current setting
+            // to ensure the port is truly cleared during switches.
+            await Promise.allSettled([
+                invoke('stop_transformers_server_command'),
+                invoke('stop_llama_server_command')
+            ]);
+
             setIsServerRunning(false);
             setInfServerStatus('idle');
-            addLogMessage('Server stopped');
+            addLogMessage('Inference engine stopped');
         } catch (error) {
             addLogMessage(`Error stopping server: ${error}`);
         }
@@ -657,7 +894,12 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
         parts.push(`--model "${selectedBaseModel}"`);
         parts.push(`--port ${modelConfig?.serverPort || 8080}`);
         parts.push(`--ctx-size ${contextSize}`);
-        parts.push(`--n-gpu-layers ${infGpuLayers}`);
+        if (infAutoFit) {
+            parts.push('--fit on');
+            parts.push('--fit-margin 1024');
+        } else {
+            parts.push(`--n-gpu-layers ${infGpuLayers}`);
+        }
         parts.push(`--batch-size ${infBatchSize}`);
         parts.push(`--ubatch-size ${infUbatchSize}`);
         if (infFlashAttn) parts.push('--flash-attn on');
@@ -665,7 +907,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
         if (infThreads > 0) parts.push(`--threads ${infThreads}`);
         if (selectedLoraAdapter) parts.push(`--lora "${selectedLoraAdapter}"`);
         return parts.join(' \\\n  ');
-    }, [selectedBaseModel, contextSize, infGpuLayers, infBatchSize, infUbatchSize, infFlashAttn, infNoMmap, infThreads, selectedLoraAdapter, modelConfig]);
+    }, [selectedBaseModel, contextSize, infGpuLayers, infBatchSize, infUbatchSize, infFlashAttn, infNoMmap, infThreads, selectedLoraAdapter, modelConfig, infAutoFit]);
 
     // Status indicator component
     const StatusIndicator = () => {
@@ -685,7 +927,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
         );
     };
 
-    const isCanvasVisible = infEnableCanvas && (!!canvasContent || canvasStreamingEdit.isActive);
+    const isCanvasVisible = infEnableCanvas && infCanvasVisible;
 
     return (
         <div style={{ display: 'flex', height: 'calc(100vh - 100px)', overflow: 'hidden' }}>
@@ -715,19 +957,25 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                     flexShrink: 0
                 }}>
                     {/* Model Selector */}
-                    <div style={{ flex: 1, maxWidth: '300px' }}>
+                    <div style={{ flex: 2, maxWidth: '500px' }}>
                         <Select
                             value={selectedBaseModel}
                             onChange={(val) => {
+                                // Detect engine from selected option if possible, or just use GGUF as default
+                                const opt = modelOptions.find(o => o.value === val);
+                                if (opt) {
+                                    setInfInferenceEngine(opt.engine === 'GGUF' ? 'llamacpp' : 'transformers');
+                                }
                                 if (isServerRunning) handleStopServer();
                                 setSelectedBaseModel(val);
                             }}
                             options={[
                                 { value: '', label: 'Select a model...' },
-                                ...availableGGUFModels.map(m => ({ value: m, label: m }))
+                                ...modelOptions
                             ]}
                             placeholder="Select a model..."
                             style={{ width: '100%' }}
+                            showSearch={true}
                         />
                     </div>
 
@@ -828,10 +1076,19 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                     </button>
                 </div>
 
-                {/* Main Content */}
-                <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                    {/* Chat Area */}
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'rgba(15,15,20,0.5)' }}>
+
+                {/* Main Content Area - Flex Row */}
+                <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
+
+                    {/* 1. Chat Column */}
+                    <div style={{
+                        flex: 1,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        background: 'rgba(15,15,20,0.5)',
+                        minWidth: '300px',
+                        overflow: 'hidden'
+                    }}>
                         {/* Messages */}
                         <div style={{ flex: 1, overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                             {chatMessages.length === 0 && (
@@ -850,7 +1107,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                     <div style={{ width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: msg.sender === 'user' ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)' }}>
                                         {msg.sender === 'user' ? <User size={18} /> : <Bot size={18} />}
                                     </div>
-                                    <div style={{ flex: 1, maxWidth: '75%' }}>
+                                    <div style={{ flex: 1, maxWidth: '85%' }}>
                                         {editingIndex === idx ? (
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                                 <textarea
@@ -874,11 +1131,15 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                     color: msg.sender === 'user' ? 'white' : '#e5e7eb'
                                                 }}>
                                                     {msg.sender === 'bot' ? (() => {
-                                                        const { thinking, response } = parseMessageContent(msg.text);
+                                                        const blocks = parseMessageContentBlocks(msg.text);
                                                         return (
                                                             <>
-                                                                {thinking && <ThinkingBlock content={thinking} />}
-                                                                <MarkdownRenderer content={response} />
+                                                                {blocks.map((block, bIdx) => {
+                                                                    if (block.type === 'thinking') return <ThinkingBlock key={bIdx} content={block.content} />;
+                                                                    if (block.type === 'tool_call') return <ToolCallBlock key={bIdx} content={block.content} />;
+                                                                    if (block.type === 'tool_result') return <ToolResultBlock key={bIdx} content={block.content} />;
+                                                                    return <MarkdownRenderer key={bIdx} content={block.content} />;
+                                                                })}
                                                             </>
                                                         );
                                                     })() : (
@@ -909,7 +1170,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             <div ref={messagesEndRef} />
                         </div>
 
-                        {/* Input */}
+                        {/* Input Area */}
                         <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(20,20,25,0.8)' }}>
                             {/* Image Preview */}
                             {pendingImage && (
@@ -936,11 +1197,21 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 />
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
-                                    style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', color: availableGGUFModels.length > 0 ? '#e4e4e7' : '#52525b', cursor: 'pointer' }}
+                                    style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', color: modelOptions.length > 0 ? '#e4e4e7' : '#52525b', cursor: 'pointer' }}
                                     title="Attach Image"
                                 >
                                     <Paperclip size={18} />
                                 </button>
+
+                                {infEnableCanvas && (
+                                    <button
+                                        onClick={() => setInfCanvasVisible(!infCanvasVisible)}
+                                        style={{ padding: '10px', background: infCanvasVisible ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', color: infCanvasVisible ? '#a78bfa' : '#9ca3af', cursor: 'pointer' }}
+                                        title="Toggle Canvas"
+                                    >
+                                        <PenTool size={18} />
+                                    </button>
+                                )}
 
                                 {chatMessages.length > 0 && (
                                     <button onClick={handleClearConversation} style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', color: '#9ca3af', cursor: 'pointer' }} title="Clear Chat">
@@ -984,241 +1255,268 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                         </div>
                     </div>
 
-                    {/* Sidebar */}
-                    {showSidebar && (
-                        <div style={{
-                            width: '320px',
-                            borderLeft: '1px solid rgba(255,255,255,0.08)',
-                            background: 'rgba(20,20,28,0.6)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            overflowY: 'auto'
-                        }}>
-                            {/* Parameters Section */}
-                            <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                                <h3 style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>Parameters</h3>
-
-                                <div style={{ marginBottom: '16px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
-                                        <span>Temperature</span>
-                                        <span style={{ color: '#a78bfa' }}>{temperature}</span>
-                                    </div>
-                                    <input type="range" min="0" max="2" step="0.1" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} style={{ width: '100%', accentColor: '#a78bfa' }} />
-                                </div>
-
-                                <div style={{ marginBottom: '16px' }}>
-                                    <label style={{ fontSize: '13px', display: 'block', marginBottom: '6px' }}>System Prompt</label>
-                                    <textarea
-                                        value={systemPrompt}
-                                        onChange={(e) => setSystemPrompt(e.target.value)}
-                                        style={{ width: '100%', height: '80px', padding: '10px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px', resize: 'vertical' }}
-                                        placeholder="You are a helpful assistant..."
-                                    />
-                                </div>
-
-                                {userMode === 'power' && (
-                                    <>
-                                        <div style={{ marginBottom: '16px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
-                                                <span>Top P</span>
-                                                <span style={{ color: '#a78bfa' }}>{topP}</span>
-                                            </div>
-                                            <input type="range" min="0" max="1" step="0.05" value={topP} onChange={(e) => setTopP(Number(e.target.value))} style={{ width: '100%', accentColor: '#a78bfa' }} />
-                                        </div>
-
-                                        <div style={{ marginBottom: '16px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
-                                                <span>Top K</span>
-                                                <span style={{ color: '#a78bfa' }}>{topK}</span>
-                                            </div>
-                                            <input type="range" min="0" max="100" step="1" value={topK} onChange={(e) => setTopK(Number(e.target.value))} style={{ width: '100%', accentColor: '#a78bfa' }} />
-                                        </div>
-
-                                        <Input label="Context Size" type="number" value={contextSize} onChange={(e) => setContextSize(Number(e.target.value))} />
-                                    </>
-                                )}
+                    {/* 2. Canvas Column (Middle) */}
+                    {infEnableCanvas && (
+                        <>
+                            {/* Resizer Handle */}
+                            <div
+                                onMouseDown={() => setIsResizingCanvas(true)}
+                                style={{ width: '4px', background: 'rgba(255,255,255,0.05)', cursor: 'col-resize', transition: 'background 0.2s', zIndex: 10 }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(167, 139, 250, 0.5)'}
+                                onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                            />
+                            <div style={{ width: canvasWidth, minWidth: '300px', borderLeft: '1px solid rgba(255,255,255,0.08)', background: '#121216', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                                <CanvasPanel
+                                    artifacts={infCanvasArtifacts}
+                                    onArtifactsChange={setInfCanvasArtifacts}
+                                    isVisible={true}
+                                    onToggleVisibility={() => setInfCanvasVisible(false)}
+                                    // Remove Analyze button logic as requested
+                                    onAnalyzeWithAI={undefined}
+                                />
                             </div>
+                        </>
+                    )}
 
-                            {/* Advanced Section (Power User) */}
-                            {userMode === 'power' && (
+                    {/* 3. Settings Column (Right) */}
+                    {showSidebar && (
+                        <>
+                            {/* Resizer Handle */}
+                            <div
+                                onMouseDown={() => setIsResizingSettings(true)}
+                                style={{ width: '4px', background: 'rgba(255,255,255,0.05)', cursor: 'col-resize', transition: 'background 0.2s', zIndex: 10 }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(167, 139, 250, 0.5)'}
+                                onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                            />
+                            <div style={{
+                                width: settingsWidth,
+                                minWidth: '250px',
+                                borderLeft: '1px solid rgba(255,255,255,0.08)',
+                                background: 'rgba(20,20,28,0.6)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                overflowY: 'auto',
+                                flexShrink: 0
+                            }}>
+                                {/* Parameters Section */}
+                                <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                    <h3 style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>Parameters</h3>
+
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <Input
+                                            label="Temperature"
+                                            type="range"
+                                            min="0"
+                                            max="2"
+                                            step="0.1"
+                                            value={temperature}
+                                            onChange={(e) => setTemperature(Number(e.target.value))}
+                                            tooltip="Controls randomness. Lower values are more focused, higher values are more creative."
+                                            displayValue={temperature.toString()}
+                                        />
+                                    </div>
+
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ fontSize: '13px', display: 'block', marginBottom: '6px' }}>System Prompt</label>
+                                        <textarea
+                                            value={systemPrompt}
+                                            onChange={(e) => setSystemPrompt(e.target.value)}
+                                            style={{ width: '100%', height: '80px', padding: '10px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px', resize: 'vertical' }}
+                                            placeholder="You are a helpful assistant..."
+                                        />
+                                    </div>
+
+                                    {userMode === 'power' && (
+                                        <>
+                                            <div style={{ marginBottom: '16px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                                                    <span>Top P</span>
+                                                    <span style={{ color: '#a78bfa' }}>{topP}</span>
+                                                </div>
+                                                <input type="range" min="0" max="1" step="0.05" value={topP} onChange={(e) => setTopP(Number(e.target.value))} style={{ width: '100%', accentColor: '#a78bfa' }} />
+                                            </div>
+
+                                            <div style={{ marginBottom: '16px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                                                    <span>Top K</span>
+                                                    <span style={{ color: '#a78bfa' }}>{topK}</span>
+                                                </div>
+                                                <input type="range" min="0" max="100" step="1" value={topK} onChange={(e) => setTopK(Number(e.target.value))} style={{ width: '100%', accentColor: '#a78bfa' }} />
+                                            </div>
+
+                                            <Input
+                                                label="Context Size"
+                                                type="number"
+                                                value={contextSize}
+                                                onChange={(e) => setContextSize(Number(e.target.value))}
+                                                tooltip="The maximum number of tokens the model can remember (Context Window)."
+                                            />
+                                        </>
+                                    )}
+                                </div>
+
+                                {/* Advanced Section (Power User) */}
+                                {userMode === 'power' && (
+                                    <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                        <button
+                                            onClick={() => setShowAdvanced(!showAdvanced)}
+                                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 0, marginBottom: showAdvanced ? '16px' : 0 }}
+                                        >
+                                            <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}><Settings size={14} /> Advanced Options</span>
+                                            <ChevronDown size={16} style={{ transform: showAdvanced ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                                        </button>
+
+                                        {showAdvanced && (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={infAutoFit} onChange={(e) => setInfAutoFit(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
+                                                    <Cpu size={14} /> <span style={{ fontSize: '13px' }}>Auto-Fit Memory (--fit)</span>
+                                                </label>
+
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={infFlashAttn} onChange={(e) => setInfFlashAttn(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
+                                                    <Zap size={14} /> <span style={{ fontSize: '13px' }}>Flash Attention</span>
+                                                </label>
+
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={infNoMmap} onChange={(e) => setInfNoMmap(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
+                                                    <HardDrive size={14} /> <span style={{ fontSize: '13px' }}>No Memory Map</span>
+                                                </label>
+
+                                                <div style={{ opacity: infAutoFit ? 0.5 : 1, pointerEvents: infAutoFit ? 'none' : 'auto' }}>
+                                                    <label style={{ fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Layers size={14} /> GPU Layers</span>
+                                                        <span style={{ color: '#a78bfa' }}>{infGpuLayers >= maxGpuLayers ? 'Max' : infGpuLayers} / {maxGpuLayers}</span>
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max={maxGpuLayers} // Dynamic max
+                                                        step="1"
+                                                        value={infGpuLayers}
+                                                        onChange={(e) => {
+                                                            const val = parseInt(e.target.value);
+                                                            setInfGpuLayers(val);
+                                                        }}
+                                                        style={{ width: '100%', accentColor: '#a78bfa', cursor: 'pointer' }}
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}><Cpu size={14} /> Batch Size</label>
+                                                    <input type="number" value={infBatchSize} onChange={(e) => setInfBatchSize(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
+                                                </div>
+
+                                                <div>
+                                                    <label style={{ fontSize: '13px', marginBottom: '6px', display: 'block' }}>Micro-Batch Size</label>
+                                                    <input type="number" value={infUbatchSize} onChange={(e) => setInfUbatchSize(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
+                                                </div>
+
+                                                <div>
+                                                    <label style={{ fontSize: '13px', marginBottom: '6px', display: 'block' }}>Threads (0 = auto)</label>
+                                                    <input type="number" value={infThreads} onChange={(e) => setInfThreads(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Tools Section */}
                                 <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
                                     <button
-                                        onClick={() => setShowAdvanced(!showAdvanced)}
-                                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 0, marginBottom: showAdvanced ? '16px' : 0 }}
+                                        onClick={() => setShowTools(!showTools)}
+                                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 0, marginBottom: showTools ? '16px' : 0 }}
                                     >
-                                        <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}><Settings size={14} /> Advanced Options</span>
-                                        <ChevronDown size={16} style={{ transform: showAdvanced ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                                        <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}><Wrench size={14} /> Tools & Display</span>
+                                        <ChevronDown size={16} style={{ transform: showTools ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
                                     </button>
 
-                                    {showAdvanced && (
+                                    {showTools && (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                             <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                <input type="checkbox" checked={infFlashAttn} onChange={(e) => setInfFlashAttn(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
-                                                <Zap size={14} /> <span style={{ fontSize: '13px' }}>Flash Attention</span>
+                                                <input type="checkbox" checked={infShowMetrics} onChange={(e) => setInfShowMetrics(e.target.checked)} style={{ accentColor: '#10b981' }} />
+                                                <Activity size={14} style={{ color: '#10b981' }} /> <span style={{ fontSize: '13px' }}>Show Metrics</span>
                                             </label>
 
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                <input type="checkbox" checked={infNoMmap} onChange={(e) => setInfNoMmap(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
-                                                <HardDrive size={14} /> <span style={{ fontSize: '13px' }}>No Memory Map</span>
-                                            </label>
+                                            <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px', marginTop: '4px' }}>
+                                                <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agentic Tools</p>
 
-                                            <div>
-                                                <label style={{ fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Layers size={14} /> GPU Layers</span>
-                                                    <span style={{ color: '#a78bfa' }}>{infGpuLayers >= maxGpuLayers ? 'Max' : infGpuLayers} / {maxGpuLayers}</span>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '10px' }}>
+                                                    <input type="checkbox" checked={infEnableWebSearch} onChange={(e) => setInfEnableWebSearch(e.target.checked)} style={{ accentColor: '#3b82f6' }} />
+                                                    <Search size={14} style={{ color: '#3b82f6' }} /> <span style={{ fontSize: '13px' }}>Web Search</span>
                                                 </label>
-                                                <input
-                                                    type="range"
-                                                    min="0"
-                                                    max={maxGpuLayers} // Dynamic max
-                                                    step="1"
-                                                    value={infGpuLayers}
-                                                    onChange={(e) => {
-                                                        const val = parseInt(e.target.value);
-                                                        setInfGpuLayers(val);
+
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={infEnableCodeExec} onChange={(e) => setInfEnableCodeExec(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
+                                                    <Code size={14} style={{ color: '#f59e0b' }} /> <span style={{ fontSize: '13px' }}>Code Execution</span>
+                                                </label>
+
+                                                <button
+                                                    onClick={() => setShowToolCreator(true)}
+                                                    style={{
+                                                        marginTop: '8px', padding: '8px',
+                                                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                                                        borderRadius: '8px', color: '#9ca3af', fontSize: '12px',
+                                                        cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center',
+                                                        width: '100%'
                                                     }}
-                                                    style={{ width: '100%', accentColor: '#a78bfa', cursor: 'pointer' }}
-                                                />
+                                                >
+                                                    <Settings2 size={12} /> Create Custom Tool
+                                                </button>
                                             </div>
 
-                                            <div>
-                                                <label style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}><Cpu size={14} /> Batch Size</label>
-                                                <input type="number" value={infBatchSize} onChange={(e) => setInfBatchSize(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
-                                            </div>
+                                            <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px', marginTop: '4px' }}>
+                                                <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Display</p>
 
-                                            <div>
-                                                <label style={{ fontSize: '13px', marginBottom: '6px', display: 'block' }}>Micro-Batch Size</label>
-                                                <input type="number" value={infUbatchSize} onChange={(e) => setInfUbatchSize(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
-                                            </div>
-
-                                            <div>
-                                                <label style={{ fontSize: '13px', marginBottom: '6px', display: 'block' }}>Threads (0 = auto)</label>
-                                                <input type="number" value={infThreads} onChange={(e) => setInfThreads(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={infEnableCanvas} onChange={(e) => setInfEnableCanvas(e.target.checked)} style={{ accentColor: '#8b5cf6' }} />
+                                                    <PenTool size={14} style={{ color: '#8b5cf6' }} /> <span style={{ fontSize: '13px' }}>Canvas Mode</span>
+                                                </label>
                                             </div>
                                         </div>
                                     )}
                                 </div>
-                            )}
 
-                            {/* Tools Section */}
-                            <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                                <button
-                                    onClick={() => setShowTools(!showTools)}
-                                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 0, marginBottom: showTools ? '16px' : 0 }}
-                                >
-                                    <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}><Wrench size={14} /> Tools & Display</span>
-                                    <ChevronDown size={16} style={{ transform: showTools ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-                                </button>
+                                {/* Command Preview */}
+                                {userMode === 'power' && selectedBaseModel && (
+                                    <div style={{ padding: '20px' }}>
+                                        <button
+                                            onClick={() => setShowCommandPreview(!showCommandPreview)}
+                                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 0, marginBottom: showCommandPreview ? '12px' : 0 }}
+                                        >
+                                            <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}><Terminal size={14} /> Command Preview</span>
+                                            <ChevronDown size={16} style={{ transform: showCommandPreview ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                                        </button>
 
-                                {showTools && (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                            <input type="checkbox" checked={infShowMetrics} onChange={(e) => setInfShowMetrics(e.target.checked)} style={{ accentColor: '#10b981' }} />
-                                            <Activity size={14} style={{ color: '#10b981' }} /> <span style={{ fontSize: '13px' }}>Show Metrics</span>
-                                        </label>
-
-                                        <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px', marginTop: '4px' }}>
-                                            <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agentic Tools</p>
-
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '10px' }}>
-                                                <input type="checkbox" checked={infEnableWebSearch} onChange={(e) => setInfEnableWebSearch(e.target.checked)} style={{ accentColor: '#3b82f6' }} />
-                                                <Search size={14} style={{ color: '#3b82f6' }} /> <span style={{ fontSize: '13px' }}>Web Search</span>
-                                            </label>
-
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                <input type="checkbox" checked={infEnableCodeExec} onChange={(e) => setInfEnableCodeExec(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
-                                                <Code size={14} style={{ color: '#f59e0b' }} /> <span style={{ fontSize: '13px' }}>Code Execution</span>
-                                            </label>
-
-                                            <button
-                                                onClick={() => setShowToolCreator(true)}
-                                                style={{
-                                                    marginTop: '8px', padding: '8px',
-                                                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                                                    borderRadius: '8px', color: '#9ca3af', fontSize: '12px',
-                                                    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center',
-                                                    width: '100%'
-                                                }}
-                                            >
-                                                <Settings2 size={12} /> Create Custom Tool
-                                            </button>
-                                        </div>
-
-                                        <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px', marginTop: '4px' }}>
-                                            <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Display</p>
-
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                <input type="checkbox" checked={infEnableCanvas} onChange={(e) => setInfEnableCanvas(e.target.checked)} style={{ accentColor: '#8b5cf6' }} />
-                                                <PenTool size={14} style={{ color: '#8b5cf6' }} /> <span style={{ fontSize: '13px' }}>Canvas Mode</span>
-                                            </label>
-                                        </div>
+                                        {showCommandPreview && (
+                                            <pre style={{
+                                                padding: '12px',
+                                                background: 'rgba(0,0,0,0.4)',
+                                                borderRadius: '8px',
+                                                fontSize: '11px',
+                                                color: '#a3e635',
+                                                overflowX: 'auto',
+                                                whiteSpace: 'pre-wrap',
+                                                wordBreak: 'break-all',
+                                                fontFamily: 'monospace',
+                                                margin: 0
+                                            }}>
+                                                {commandPreview}
+                                            </pre>
+                                        )}
                                     </div>
                                 )}
                             </div>
-
-                            {/* Command Preview */}
-                            {userMode === 'power' && selectedBaseModel && (
-                                <div style={{ padding: '20px' }}>
-                                    <button
-                                        onClick={() => setShowCommandPreview(!showCommandPreview)}
-                                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 0, marginBottom: showCommandPreview ? '12px' : 0 }}
-                                    >
-                                        <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}><Terminal size={14} /> Command Preview</span>
-                                        <ChevronDown size={16} style={{ transform: showCommandPreview ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-                                    </button>
-
-                                    {showCommandPreview && (
-                                        <pre style={{
-                                            padding: '12px',
-                                            background: 'rgba(0,0,0,0.4)',
-                                            borderRadius: '8px',
-                                            fontSize: '11px',
-                                            color: '#a3e635',
-                                            overflowX: 'auto',
-                                            whiteSpace: 'pre-wrap',
-                                            wordBreak: 'break-all',
-                                            fontFamily: 'monospace',
-                                            margin: 0
-                                        }}>
-                                            {commandPreview}
-                                        </pre>
-                                    )}
-                                </div>
-                            )}
-                        </div>
+                        </>
                     )}
                 </div>
+
+                <ToolCreatorModal
+                    isOpen={showToolCreator}
+                    onClose={() => setShowToolCreator(false)}
+                    onSaveSuccess={() => addLogMessage('Custom tool created successfully')}
+                />
             </div>
-
-            {/* Canvas Side Panel */}
-            {
-                isCanvasVisible && (
-                    <div style={{
-                        width: '45%',
-                        minWidth: '400px',
-                        background: '#0f0f14',
-                        borderLeft: '1px solid rgba(255,255,255,0.08)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        padding: '20px',
-                        gap: '16px'
-                    }}>
-                        <Canvas
-                            content={canvasContent}
-                            mode={canvasMode}
-                            onContentChange={(newContent) => setCanvasContent(newContent)}
-                            isEditable={!isSending}
-                            streamingEdit={canvasStreamingEdit.isActive ? canvasStreamingEdit : null}
-                        />
-                    </div>
-                )
-            }
-
-            <ToolCreatorModal
-                isOpen={showToolCreator}
-                onClose={() => setShowToolCreator(false)}
-                onSaveSuccess={() => addLogMessage('Custom tool created successfully')}
-            />
         </div>
     );
 };

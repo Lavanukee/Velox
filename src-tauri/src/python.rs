@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 pub struct PythonProcessState {
     pub data_collector_child: Mutex<Option<Child>>,
     pub llama_server_child: Mutex<Option<Child>>,
+    pub transformers_child: Mutex<Option<Child>>,
     pub tensorboard_child: Mutex<Option<Child>>,
     pub tensorboard_port: Mutex<Option<u16>>,
 }
@@ -17,6 +18,7 @@ impl Default for PythonProcessState {
         PythonProcessState {
             data_collector_child: Mutex::new(None),
             llama_server_child: Mutex::new(None),
+            transformers_child: Mutex::new(None),
             tensorboard_child: Mutex::new(None),
             tensorboard_port: Mutex::new(None),
         }

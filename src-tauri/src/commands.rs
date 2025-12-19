@@ -27,17 +27,31 @@ fn get_binaries_dir(app_handle: &AppHandle) -> PathBuf {
 
 // --- COMMANDS ---
 
+const LLAMA_VERSION: &str = "b3263"; // Startup check will force update if this changes
+
 #[tauri::command]
 pub async fn check_python_installed_command(app_handle: AppHandle) -> Result<bool, String> {
     match get_python_command(&app_handle) {
         Ok((python_exe, _)) => {
-            // Verify it actually runs
+            // Verify Python runs AND critical dependencies are importable
+            // We check for 'unsloth' and 'torch' as the primary indicators of a valid environment
             let output = create_hidden_command(&python_exe)
-                .arg("--version")
+                .arg("-c")
+                .arg("import unsloth; import torch; print('Backend Ready')")
                 .output()
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(output.status.success())
+
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                Ok(stdout.contains("Backend Ready"))
+            } else {
+                debug!(
+                    "Python dependency check failed: {:?}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                Ok(false)
+            }
         }
         Err(_) => Ok(false),
     }
@@ -57,12 +71,34 @@ pub async fn check_llama_binary_command(app_handle: AppHandle) -> Result<bool, S
 
     let mut exists = path.exists();
 
-    // On Windows with CUDA, verify the DLL exists too, otherwise we might be stuck with CPU-only binaries
+    // Check version
+    let version_file = bin_dir.join("version.txt");
+    if exists {
+        if let Ok(installed_version) = tokio::fs::read_to_string(&version_file).await {
+            let installed = installed_version.trim();
+            if installed != LLAMA_VERSION {
+                debug!("Llama binary version mismatch. Installed: {}, Expected: {}. Triggering update.", installed, LLAMA_VERSION);
+                exists = false;
+            }
+        } else {
+            // No version file implies old install or broken
+            debug!(
+                "Llama binary version.txt missing at {:?}. Triggering update.",
+                version_file
+            );
+            exists = false;
+        }
+    }
+
+    // On Windows with CUDA, verify the DLL exists too
     if exists && cfg!(windows) {
         if let ComputeBackend::Cuda = detect_backend() {
             let cuda_dll = bin_dir.join("ggml-cuda.dll");
             if !cuda_dll.exists() {
-                debug!("Llama binary exists but ggml-cuda.dll is missing. Triggering re-download.");
+                debug!(
+                    "Llama binary exists but ggml-cuda.dll is missing at {:?}. Triggering update.",
+                    cuda_dll
+                );
                 exists = false;
             }
         }
@@ -84,10 +120,9 @@ pub async fn download_llama_binary_command(
 
     let (main_keywords, dep_keywords): (Vec<&str>, Vec<&str>) =
         match (std::env::consts::OS, &backend) {
-            ("windows", ComputeBackend::Cuda) => (
-                vec!["bin-win-cuda-12", "x64"],
-                vec!["cudart", "win", "cu12"],
-            ),
+            ("windows", ComputeBackend::Cuda) => {
+                (vec!["cuda", "win", "x64"], vec!["cudart", "win"])
+            }
             ("windows", ComputeBackend::Cpu) => (vec!["bin-win-x64"], vec![]),
             ("macos", ComputeBackend::Metal) => (vec!["bin-macos-arm64"], vec![]),
             ("macos", ComputeBackend::Cpu) => (vec!["bin-macos-x64"], vec![]),
@@ -104,10 +139,13 @@ pub async fn download_llama_binary_command(
     debug!("{}", log_msg);
 
     let client = reqwest::Client::new();
-    let release_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+    let release_url = format!(
+        "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{}",
+        LLAMA_VERSION
+    );
 
     let resp = client
-        .get(release_url)
+        .get(&release_url)
         .header("User-Agent", "tauri-app")
         .send()
         .await
@@ -256,6 +294,17 @@ pub async fn download_llama_binary_command(
         "llama-server"
     });
     if server_path.exists() {
+        // Save version file
+        let version_file = bin_dir.join("version.txt");
+        if let Err(e) = tokio::fs::write(&version_file, LLAMA_VERSION).await {
+            window
+                .emit(
+                    "log",
+                    format!("Warning: Failed to save version file: {}", e),
+                )
+                .unwrap();
+        }
+
         window
             .emit("log", "Engine installed successfully!".to_string())
             .unwrap();
@@ -571,6 +620,7 @@ pub async fn start_llama_server_command(
     no_mmap: bool,
     mmproj_path: String,
     lora_path: Option<String>,
+    auto_fit: bool,
 ) -> Result<String, String> {
     // Kill existing if any
     {
@@ -659,7 +709,6 @@ pub async fn start_llama_server_command(
     }
     if flash_attn {
         args.push("--flash-attn".to_string());
-        args.push("on".to_string());
     }
     if no_mmap {
         args.push("--no-mmap".to_string());
@@ -668,7 +717,28 @@ pub async fn start_llama_server_command(
         args.push("--threads".to_string());
         args.push(t.to_string());
     }
-    // "threads" arg is often auto-detected or --threads, omitting if not strictly required or use defaults.
+
+    // Default stop sequences to prevent model hallucinations
+    let stop_sequences = vec![
+        "<|im_start|>",
+        "<|im_end|>",
+        "\nuser:",
+        "\nassistant:",
+        "###",
+        "</s>",
+    ];
+    for stop_seq in stop_sequences {
+        args.push("--stop".to_string());
+        args.push(stop_seq.to_string());
+    }
+
+    // Auto-fit memory management (llama.cpp --fit feature)
+    // When enabled, llama.cpp automatically adjusts context size and GPU layers to maximize VRAM usage
+    // Note: This is a boolean flag in modern llama.cpp, not --fit on
+    // Actually, checking b3263 docs, --fit might not exist. Let's remove it to prevent errors.
+    // if auto_fit {
+    //     args.push("--fit".to_string());
+    // }
 
     let mut child_guard = python_process_state.llama_server_child.lock().await;
 
@@ -747,6 +817,103 @@ pub async fn check_llama_server_status_command(
 ) -> Result<bool, String> {
     let child_guard = python_process_state.llama_server_child.lock().await;
     Ok(child_guard.is_some())
+}
+
+#[tauri::command]
+pub async fn start_transformers_server_command(
+    window: Window,
+    app_handle: AppHandle,
+    python_process_state: State<'_, Arc<PythonProcessState>>,
+    model_path: String,
+    port: u16,
+) -> Result<String, String> {
+    // Kill existing if any
+    {
+        let mut child_guard = python_process_state.transformers_child.lock().await;
+        if let Some(child) = child_guard.as_mut() {
+            let _ = child.kill().await;
+            *child_guard = None;
+        }
+    }
+
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "transformers_server.py");
+
+    // Check if model path is absolute, if not try to find it in data/models
+    let resolved_model_path = if PathBuf::from(&model_path).is_absolute() {
+        model_path
+    } else {
+        get_data_dir(&app_handle)
+            .join("data/models")
+            .join(&model_path)
+            .to_string_lossy()
+            .to_string()
+    };
+
+    let mut cmd = create_hidden_command(&python_exe);
+    #[cfg(target_os = "windows")]
+    {
+        // use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    cmd.arg(&script)
+        .arg("--model")
+        .arg(&resolved_model_path)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--host")
+        .arg("0.0.0.0")
+        .current_dir(&work_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or("No stdout")?;
+    let stderr = child.stderr.take().ok_or("No stderr")?;
+
+    let win_c = window.clone();
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            win_c
+                .emit("log", format!("TF_SERVER: {}", line.trim()))
+                .ok();
+            line.clear();
+        }
+    });
+
+    let win_c2 = window.clone();
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            win_c2
+                .emit("log", format!("TF_SERVER_ERR: {}", line.trim()))
+                .ok();
+            line.clear();
+        }
+    });
+
+    let mut child_guard = python_process_state.transformers_child.lock().await;
+    *child_guard = Some(child);
+
+    Ok("Transformers server started".to_string())
+}
+
+#[tauri::command]
+pub async fn stop_transformers_server_command(
+    python_process_state: State<'_, Arc<PythonProcessState>>,
+) -> Result<String, String> {
+    let mut child_guard = python_process_state.transformers_child.lock().await;
+    if let Some(child) = child_guard.as_mut() {
+        let _ = child.kill().await;
+        *child_guard = None;
+        Ok("Transformers server stopped".to_string())
+    } else {
+        Err("Transformers server is not running".to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1275,6 +1442,7 @@ pub async fn export_resources_command(
 pub struct HFSearchResult {
     pub id: String,
     pub name: String,
+    pub author: Option<String>,
     pub downloads: u64,
     pub likes: u64,
 }
@@ -1375,6 +1543,31 @@ pub async fn list_hf_repo_files_command(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let files: Vec<HFFile> =
         serde_json::from_str(&stdout).map_err(|e| format!("Parse error: {}", e))?;
+    Ok(files)
+}
+
+#[tauri::command]
+pub async fn list_directory_command(
+    app_handle: AppHandle,
+    path: String,
+) -> Result<Vec<String>, String> {
+    let path_buf = PathBuf::from(&path);
+    let target_path = if path_buf.is_absolute() {
+        path_buf
+    } else {
+        get_data_dir(&app_handle).join(path)
+    };
+
+    let mut files = Vec::new();
+    let read_dir = fs::read_dir(target_path).await.map_err(|e| e.to_string())?;
+    let mut entries = tokio_stream::wrappers::ReadDirStream::new(read_dir);
+
+    while let Some(entry) = entries.next().await {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if let Ok(name) = entry.file_name().into_string() {
+            files.push(name);
+        }
+    }
     Ok(files)
 }
 
@@ -2180,6 +2373,39 @@ pub async fn start_training_command(
         }
     });
 
+    // Monitor process exit
+    let win_c3 = window.clone();
+    tokio::spawn(async move {
+        let status = child.wait().await;
+        // Emit global event regarding training status
+        let success = status.as_ref().map(|s| s.success()).unwrap_or(false);
+        let code = status.as_ref().ok().and_then(|s| s.code());
+
+        // Log the final result
+        if success {
+            win_c3
+                .emit("log", "TRAIN: Training finished successfully.")
+                .ok();
+        } else {
+            win_c3
+                .emit(
+                    "log",
+                    format!("TRAIN: Training failed with exit code {:?}", code),
+                )
+                .ok();
+        }
+
+        win_c3
+            .emit(
+                "training_finished",
+                serde_json::json!({
+                    "success": success,
+                    "code": code
+                }),
+            )
+            .ok();
+    });
+
     let mut res = serde_json::Map::new();
     res.insert(
         "tensorboard_port".to_string(),
@@ -2684,6 +2910,10 @@ pub async fn setup_python_env_command(
             "tensorboard",
             "huggingface_hub",
             "requests",
+            "uvicorn",
+            "fastapi",
+            "jinja2",
+            "python-multipart",
             "gguf @ git+https://github.com/ggerganov/llama.cpp.git#subdirectory=gguf-py",
         ],
         "Core Dependencies",

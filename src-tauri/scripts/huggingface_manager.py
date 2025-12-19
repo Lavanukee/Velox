@@ -143,9 +143,27 @@ def cmd_download(args):
     base_folder = os.path.abspath(args.output)
     
     files_to_download = args.files.split(',') if args.files else []
+    repo_type = "dataset" if args.type == "dataset" else "model"
+    
+    # If no specific files are requested, download the entire snapshot
     if not files_to_download:
-        print("Error: No files specified for download.", file=sys.stderr)
-        sys.exit(1)
+        print(f"No specific files provided. Downloading full snapshot to: {base_folder}", file=sys.stderr)
+        sys.stderr.flush()
+        try:
+            from huggingface_hub import snapshot_download
+            snapshot_download(
+                repo_id=args.repo_id,
+                repo_type=repo_type,
+                token=args.token,
+                local_dir=base_folder,
+                local_dir_use_symlinks=False
+            )
+            print("PROGRESS:100", file=sys.stderr)
+            print("Download complete.", file=sys.stderr)
+            return
+        except Exception as e:
+            print(f"Error downloading snapshot: {e}", file=sys.stderr)
+            sys.exit(1)
 
     print(f"Starting download to: {base_folder}", file=sys.stderr)
     sys.stderr.flush()
@@ -220,12 +238,94 @@ def cmd_convert(args):
         
         # Detect file format from first file
         first_file = data_files[0].lower()
-        if first_file.endswith('.parquet'):
+        
+        if first_file.endswith(('.json', '.jsonl')):
+            print("Detected JSON/JSONL. Using robust generator with schema normalization...", file=sys.stderr)
+            
+            from datasets import Dataset, Features, Sequence, Value
+
+            # Define strict schema to prevent type errors while allowing multimodal data
+            # Use list notation [{...}] for sequence of structs to avoid ambiguity
+            features = Features({
+                "conversations": [{
+                    "role": Value("string"),
+                    "content": Value("string"),
+                    "images": Sequence(Value("string")),
+                    "audio": Sequence(Value("string"))
+                }]
+            })
+
+            def normalize_message(msg):
+                # Standardized extraction
+                role = 'unknown'
+                content = ''
+                images = []
+                audio = []
+
+                # 1. Extract Role & Content
+                if 'role' in msg: role = msg['role']
+                elif 'from' in msg: role = msg['from']
+                
+                if 'content' in msg: content = msg['content']
+                elif 'value' in msg: content = msg['value']
+
+                # 2. Extract Multimodal (Images) - handle string or list
+                if 'image' in msg:
+                    val = msg['image']
+                    if isinstance(val, list): images.extend([str(v) for v in val])
+                    elif val: images.append(str(val))
+                if 'images' in msg:
+                    val = msg['images']
+                    if isinstance(val, list): images.extend([str(v) for v in val])
+                    elif val: images.append(str(val))
+
+                # 3. Extract Multimodal (Audio)
+                if 'audio' in msg:
+                    val = msg['audio']
+                    if isinstance(val, list): audio.extend([str(v) for v in val])
+                    elif val: audio.append(str(val))
+
+                # 4. Normalize Role
+                if role == 'human': role = 'user'
+                if role == 'gpt': role = 'assistant'
+                
+                # 5. Return strict dict matching Feature schema
+                return {
+                    'role': str(role),
+                    'content': str(content),
+                    'images': images if images else [],    # Empty list for consistency
+                    'audio': audio if audio else []        # Empty list for consistency
+                }
+
+            def json_generator(file_paths):
+                for file_path in file_paths:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            if not line.strip(): continue
+                            try:
+                                item = json.loads(line)
+                                msgs = item.get('conversations', item.get('messages', []))
+                                
+                                if not msgs and isinstance(item, list):
+                                    msgs = item
+                                
+                                if not msgs: continue 
+                                
+                                normalized_msgs = [normalize_message(m) for m in msgs]
+                                yield {"conversations": normalized_msgs}
+                            except Exception:
+                                continue
+
+            dataset = Dataset.from_generator(
+                json_generator, 
+                gen_kwargs={"file_paths": data_files},
+                features=features  # Explicit schema prevents inferred type mismatches (NULL vs LIST)
+            )
+            
+        elif first_file.endswith('.parquet'):
             dataset = load_dataset("parquet", data_files=data_files)
         elif first_file.endswith('.csv'):
             dataset = load_dataset("csv", data_files=data_files)
-        elif first_file.endswith(('.json', '.jsonl')):
-            dataset = load_dataset("json", data_files=data_files)
         elif first_file.endswith('.arrow'):
             dataset = load_dataset("arrow", data_files=data_files)
         else:
@@ -239,7 +339,10 @@ def cmd_convert(args):
         print(json.dumps({"success": True, "path": processed_dir}))
 
     except Exception as e:
-        print(json.dumps({"error": f"Conversion failed: {str(e)}"}), file=sys.stderr)
+        import traceback
+        tb = traceback.format_exc()
+        print(f"DEBUG: {tb}", file=sys.stderr)
+        print(json.dumps({"error": f"Conversion failed: {str(e)}\n\nTraceback:\n{tb}"}), file=sys.stderr)
         sys.exit(1)
 
 def main():

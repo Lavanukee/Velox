@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@900&family=JetBrains+Mono:wght@300;500&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --copper-bright: #e3a87c;
+            --copper-mid: #b87333;
+            --copper-dark: #5d3a1a;
+            --oxide-teal: #2a9d8f;
+            --bg-obsidian: #0a0a0c;
+            --grid-line: rgba(184, 115, 51, 0.15);
+            --ortho-speed: 3s;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-obsidian);
+            color: var(--copper-bright);
+            font-family: 'Inter', sans-serif;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* The Orthogonal Grid */
+        .ortho-canvas {
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(var(--grid-line) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+            background-size: 60px 60px;
+            background-position: center center;
+            z-index: 1;
+        }
+
+        .ortho-canvas::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at center, transparent 20%, var(--bg-obsidian) 85%);
+        }
+
+        /* Copper Etching Lines */
+        .etch-line {
+            position: absolute;
+            background: var(--copper-mid);
+            box-shadow: 0 0 15px var(--copper-dark);
+            opacity: 0.4;
+            z-index: 2;
+        }
+
+        .etch-h {
+            height: 1px;
+            width: 100%;
+            top: var(--pos);
+        }
+
+        .etch-v {
+            width: 1px;
+            height: 100%;
+            left: var(--pos);
+        }
+
+        /* Main Container */
+        .forge-container {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 900px;
+            padding: 4rem;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 4rem;
+        }
+
+        /* Branding Section */
+        .brand-section {
+            border-left: 2px solid var(--copper-mid);
+            padding-left: 2.5rem;
+        }
+
+        .brand-section h1 {
+            font-size: 6rem;
+            line-height: 0.85;
+            text-transform: uppercase;
+            letter-spacing: -4px;
+            background: linear-gradient(180deg, var(--copper-bright) 0%, var(--copper-mid) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1rem;
+            filter: drop-shadow(0 0 20px rgba(184, 115, 51, 0.3));
+        }
+
+        .brand-section p {
+            font-family: 'JetBrains Mono', monospace;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 4px;
+            color: var(--oxide-teal);
+            opacity: 0.8;
+        }
+
+        /* Progress Module */
+        .status-module {
+            width: 320px;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+        }
+
+        .step-list {
+            list-style: none;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            margin-bottom: 2rem;
+        }
+
+        .step-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            opacity: 0.3;
+            transition: all 0.5s ease;
+        }
+
+        .step-item.active {
+            opacity: 1;
+            color: var(--copper-bright);
+        }
+
+        .step-item.complete {
+            opacity: 0.6;
+            color: var(--oxide-teal);
+        }
+
+        .step-marker {
+            width: 8px;
+            height: 8px;
+            border: 1px solid currentColor;
+            margin-right: 1.5rem;
+            transform: rotate(45deg);
+        }
+
+        .active .step-marker {
+            background: var(--copper-mid);
+            box-shadow: 0 0 10px var(--copper-mid);
+            animation: pulse 1.5s infinite;
+        }
+
+        /* Gauge / Etched Progress */
+        .gauge-container {
+            height: 2px;
+            background: var(--copper-dark);
+            width: 100%;
+            position: relative;
+            overflow: visible;
+        }
+
+        .gauge-fill {
+            position: absolute;
+            left: 0;
+            top: -2px;
+            height: 6px;
+            background: var(--copper-bright);
+            width: 45%;
+            box-shadow: 0 0 20px var(--copper-mid);
+            transition: width 1s cubic-bezier(0.19, 1, 0.22, 1);
+        }
+
+        .gauge-data {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--copper-mid);
+        }
+
+        /* Animations */
+        @keyframes pulse {
+            0% {
+                transform: rotate(45deg) scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: rotate(45deg) scale(1.4);
+                opacity: 0.5;
+            }
+
+            100% {
+                transform: rotate(45deg) scale(1);
+                opacity: 1;
+            }
+        }
+
+        .scanner {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--copper-mid), transparent);
+            animation: scan var(--ortho-speed) infinite linear;
+            z-index: 5;
+            opacity: 0.2;
+        }
+
+        @keyframes scan {
+            0% {
+                transform: translateY(-100vh);
+            }
+
+            100% {
+                transform: translateY(100vh);
+            }
+        }
+
+        /* Grain Overlay */
+        .grain {
+            position: fixed;
+            inset: 0;
+            z-index: 99;
+            pointer-events: none;
+            opacity: 0.04;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3External%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+        }
+
+        /* Orthogonal Accent Lines */
+        .accent-box {
+            position: absolute;
+            border: 1px solid var(--copper-dark);
+            width: 100px;
+            height: 100px;
+            bottom: 10%;
+            right: 10%;
+            pointer-events: none;
+        }
+
+        .accent-box::before {
+            content: '';
+            position: absolute;
+            top: -50px;
+            left: -1px;
+            width: 1px;
+            height: 50px;
+            background: var(--copper-dark);
+        }
+
+        .accent-box::after {
+            content: '';
+            position: absolute;
+            top: -1px;
+            left: -50px;
+            width: 50px;
+            height: 1px;
+            background: var(--copper-dark);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="grain"></div>
+    <div class="ortho-canvas"></div>
+    <div class="scanner"></div>
+
+    <!-- Etched Orthogonal Decoration -->
+    <div class="etch-line etch-h" style="--pos: 20%;"></div>
+    <div class="etch-line etch-v" style="--pos: 15%;"></div>
+    <div class="etch-line etch-v" style="--pos: 85%;"></div>
+    <div class="accent-box"></div>
+
+    <main class="forge-container">
+        <section class="brand-section">
+            <p>Initiating System Forge</p>
+            <h1>Unsloth<br>Engine</h1>
+            <div style="margin-top: 2rem; opacity: 0.4;">
+                <svg width="120" height="2" viewBox="0 0 120 2" fill="none">
+                    <rect width="120" height="2" fill="url(#paint0_linear)" />
+                    <defs>
+                        <linearGradient id="paint0_linear" x1="0" y1="0" x2="120" y2="0" gradientUnits="userSpaceOnUse">
+                            <stop stop-color="#b87333" />
+                            <stop offset="1" stop-color="#b87333" stop-opacity="0" />
+                        </linearGradient>
+                    </defs>
+                </svg>
+            </div>
+        </section>
+
+        <section class="status-module">
+            <ul class="step-list">
+                <li class="step-item complete">
+                    <div class="step-marker"></div>
+                    <div>
+                        <div style="font-weight: 500;">ISOLATED PYTHON 3.10</div>
+                        <div style="font-size: 0.5rem; opacity: 0.7;">EXTRACTION COMPLETE</div>
+                    </div>
+                </li>
+                <li class="step-item active">
+                    <div class="step-marker"></div>
+                    <div>
+                        <div style="font-weight: 500;">UNSLOTH CORE ARTIFACTS</div>
+                        <div style="font-size: 0.5rem; opacity: 0.7;">FETCHING FROM REPOSITORY...</div>
+                    </div>
+                </li>
+                <li class="step-item">
+                    <div class="step-marker"></div>
+                    <div>
+                        <div style="font-weight: 500;">ENV VIRTUALIZATION</div>
+                        <div style="font-size: 0.5rem; opacity: 0.7;">PENDING LATTICE SETUP</div>
+                    </div>
+                </li>
+                <li class="step-item">
+                    <div class="step-marker"></div>
+                    <div>
+                        <div style="font-weight: 500;">CUDA KERNEL ALIGNMENT</div>
+                        <div style="font-size: 0.5rem; opacity: 0.7;">WAITING FOR HARDWARE HANDSHAKE</div>
+                    </div>
+                </li>
+            </ul>
+
+            <div class="gauge-container">
+                <div class="gauge-fill" id="progress-bar"></div>
+            </div>
+
+            <div class="gauge-data">
+                <span id="status-text">SYNCING_BITSTREAM</span>
+                <span id="percent-text">45.2%</span>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // Subtle progress animation simulation
+        const bar = document.getElementById('progress-bar');
+        const percentText = document.getElementById('percent-text');
+        const statusText = document.getElementById('status-text');
+        const steps = document.querySelectorAll('.step-item');
+        let progress = 45.2;
+
+        const statuses = [
+            "ETCHING_VOLUMES",
+            "MAPPING_ORTHOGONALS",
+            "CALIBRATING_WEIGHTS",
+            "PROVISIONING_CUDA"
+        ];
+
+        function updateProgress() {
+            if (progress < 100) {
+                progress += Math.random() * 0.5;
+                bar.style.width = `${progress}%`;
+                percentText.innerText = `${progress.toFixed(1)}%`;
+
+                if (Math.random() > 0.95) {
+                    statusText.innerText = statuses[Math.floor(Math.random() * statuses.length)];
+                }
+
+                if (progress > 65 && !steps[2].classList.contains('active')) {
+                    steps[1].classList.remove('active');
+                    steps[1].classList.add('complete');
+                    steps[2].classList.add('active');
+                }
+
+                requestAnimationFrame(updateProgress);
+            } else {
+                percentText.innerText = "100%";
+                statusText.innerText = "FORGE_COMPLETE";
+            }
+        }
+
+        setTimeout(updateProgress, 1000);
+    </script>
+</body>
+
+</html>

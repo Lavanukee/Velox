@@ -21,7 +21,8 @@ import {
     FileCode,
     Check,
     Square,
-    RefreshCw
+    RefreshCw,
+    Plus
 
 } from 'lucide-react';
 import './styles/ResourceDashboard.css';
@@ -55,6 +56,7 @@ interface ProjectLoraInfo {
 interface HFSearchResult {
     id: string;
     name: string;
+    author?: string;
     downloads: number;
     likes: number;
     tags?: string[];
@@ -86,6 +88,151 @@ const formatBytes = (bytes: number | null): string => {
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+};
+
+// --- Component ---
+
+interface ResourceRowProps {
+    resource: Resource;
+    isExpanded: boolean;
+    details: { local: Set<string>; remote: HFFile[] } | undefined;
+    isSelected: boolean;
+    toggleSelection: (path: string) => void;
+    handleExpandResource: (r: Resource) => void;
+    handleConvertDataset: (r: Resource) => void;
+    handleDelete: (r: Resource) => void;
+    handleDownloadSingleFile: (r: Resource, filename: string) => void;
+    converting: boolean;
+    loadingExpansion: boolean;
+}
+
+const ResourceRow: React.FC<ResourceRowProps> = ({
+    resource: r,
+    isExpanded,
+    details,
+    isSelected,
+    toggleSelection,
+    handleExpandResource,
+    handleConvertDataset,
+    handleDelete,
+    handleDownloadSingleFile,
+    converting,
+    loadingExpansion
+}) => {
+    // Merge file lists for display
+    const allFiles = useMemo(() => {
+        if (!details) return [];
+        const local = details.local;
+        const remote = details.remote;
+
+        // Map remote files
+        const merged = remote.map(f => ({
+            name: f.path,
+            size: f.size,
+            isLocal: local.has(f.path)
+        }));
+
+        // Add local-only files
+        local.forEach(f => {
+            if (!remote.find(rf => rf.path === f)) {
+                merged.push({ name: f, size: null, isLocal: true });
+            }
+        });
+
+        return merged.sort((a, b) => a.name.localeCompare(b.name));
+    }, [details]);
+
+    return (
+        <div className="rd-item">
+            <div className="rd-item-header" onClick={() => handleExpandResource(r)}>
+                <div
+                    className={`rd-item-select ${isSelected ? 'selected' : ''}`}
+                    onClick={(e) => { e.stopPropagation(); toggleSelection(r.path); }}
+                >
+                    {isSelected ? <Check size={20} /> : <Square size={20} />}
+                </div>
+
+                <div className="rd-item-icon">
+                    {r.type === 'gguf' ? <Package size={22} /> :
+                        r.type === 'lora' ? <Layers size={22} /> :
+                            r.type === 'dataset' ? <Database size={22} /> : <Brain size={22} />}
+                </div>
+
+                <div className="rd-item-details">
+                    <div className="rd-item-name" title={r.name}>{r.name}</div>
+                    <div className="rd-item-meta">
+                        <span>{r.size}</span>
+                        {r.quantization && <span className="rd-badge blue">{r.quantization}</span>}
+                        {r.is_mmproj && <span className="rd-badge purple">Vision</span>}
+                        {r.type === 'dataset' && (
+                            <>
+                                {r.dataset_format && <span className="rd-badge blue">{r.dataset_format.toUpperCase()}</span>}
+                                {r.is_processed ? (
+                                    <span className="rd-badge green flex items-center gap-1">
+                                        <Check size={10} /> Ready
+                                    </span>
+                                ) : (
+                                    <span className="rd-badge gray">Raw</span>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                    {r.type === 'dataset' && !r.is_processed && (
+                        <button
+                            className="rd-action-btn"
+                            title="Convert to Arrow"
+                            onClick={() => handleConvertDataset(r)}
+                            disabled={converting}
+                        >
+                            {converting ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                        </button>
+                    )}
+                    <button onClick={() => handleDelete(r)} className="rd-delete-btn" title="Delete">
+                        <Trash2 size={18} />
+                    </button>
+                    {isExpanded ? <ChevronDown size={18} className="text-gray-400" /> : <ChevronRight size={18} className="text-gray-400" />}
+                </div>
+            </div>
+
+            {/* Expanded File List */}
+            {isExpanded && (
+                <div className="rd-item-body">
+                    {loadingExpansion && !details ? (
+                        <div className="flex justify-center p-4"><Loader2 className="animate-spin text-gray-400" /></div>
+                    ) : (
+                        <div className="rd-file-list">
+                            {allFiles.length === 0 ? <div className="p-2 text-sm text-gray-500 italic">No files found.</div> :
+                                allFiles.map(f => (
+                                    <div key={f.name} className={`rd-file-item ${f.isLocal ? 'downloaded' : ''}`}>
+                                        <div className="flex flex-col overflow-hidden">
+                                            <span className="rd-file-name truncate" title={f.name}>{f.name}</span>
+                                            {f.size && <span className="text-xs text-gray-600">{formatBytes(f.size)}</span>}
+                                        </div>
+                                        <div className="rd-file-actions">
+                                            {f.isLocal ? (
+                                                <span className="rd-btn-icon check"><Check size={16} /></span>
+                                            ) : (
+                                                <button
+                                                    className="rd-btn-icon add"
+                                                    title="Download File"
+                                                    onClick={(e) => { e.stopPropagation(); handleDownloadSingleFile(r, f.name); }}
+                                                >
+                                                    <Plus size={16} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
 };
 
 // --- Component ---
@@ -131,6 +278,10 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
 
     const [isImportOpen, setIsImportOpen] = useState(false);
     const importRef = React.useRef<HTMLDivElement>(null);
+
+    const [expandedResourceId, setExpandedResourceId] = useState<string | null>(null);
+    const [expandedFiles, setExpandedFiles] = useState<Record<string, { local: Set<string>, remote: HFFile[] }>>({});
+    const [loadingExpansion, setLoadingExpansion] = useState(false);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -400,6 +551,98 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         }
     };
 
+    const handleExpandResource = async (r: Resource) => {
+        if (expandedResourceId === r.path) {
+            setExpandedResourceId(null);
+            return;
+        }
+
+        setExpandedResourceId(r.path);
+
+        // If already cached, don't refetch
+        if (expandedFiles[r.path]) return;
+
+        setLoadingExpansion(true);
+        try {
+            // 1. Get Local Files
+            // If the path is likely a file (e.g. ends with .gguf), use its parent directory for listing
+            let listPath = r.path;
+            if (r.type === 'gguf' && (r.path.endsWith('.gguf') || r.path.endsWith('.bin'))) {
+                // Try to get parent directory
+                const lastSlash = Math.max(r.path.lastIndexOf('/'), r.path.lastIndexOf('\\'));
+                if (lastSlash !== -1) {
+                    listPath = r.path.substring(0, lastSlash);
+                }
+            }
+
+            const localFilesList: string[] = await invoke('list_directory_command', { path: listPath });
+            const localSet = new Set(localFilesList);
+
+            // 2. Get Remote Files (Try to guess Repo ID from folder name)
+            // Convention: author--repo
+            let remoteFiles: HFFile[] = [];
+            const folderName = r.path.split(/[\\/]/).pop() || "";
+            if (folderName.includes("--")) {
+                const repoId = folderName.replace("--", "/");
+                try {
+                    remoteFiles = await invoke('list_hf_repo_files_command', {
+                        repoId: repoId,
+                        token: hfToken || null,
+                        resourceType: r.type === 'dataset' ? 'dataset' : 'model'
+                    });
+                } catch (e) {
+                    console.warn("Could not fetch remote files for " + repoId, e);
+                }
+            }
+
+            setExpandedFiles(prev => ({
+                ...prev,
+                [r.path]: { local: localSet, remote: remoteFiles }
+            }));
+
+        } catch (e) {
+            addNotification(`Failed to load file details: ${e}`, 'error');
+        } finally {
+            setLoadingExpansion(false);
+        }
+    };
+
+    const handleDownloadSingleFile = async (r: Resource, filename: string) => {
+        const folderName = r.path.split(/[\\/]/).pop() || "";
+        const repoId = folderName.replace("--", "/");
+        const taskId = `dl_file_${Date.now()}`;
+
+        addNotification(`Downloading ${filename}...`, 'info');
+
+        try {
+            if (r.type === 'dataset') {
+                await invoke('download_hf_dataset_command', {
+                    datasetId: repoId,
+                    files: [filename],
+                    token: hfToken || null,
+                    taskId
+                });
+            } else {
+                await invoke('download_hf_model_command', {
+                    modelId: repoId,
+                    files: [filename],
+                    token: hfToken || null,
+                    taskId
+                });
+            }
+            // Optimistic update
+            setExpandedFiles(prev => {
+                const current = prev[r.path];
+                if (!current) return prev;
+                const newLocal = new Set(current.local);
+                newLocal.add(filename); // Assume it will arrive
+                return { ...prev, [r.path]: { ...current, local: newLocal } };
+            });
+        } catch (e) {
+            addNotification(`Download failed: ${e}`, 'error');
+        }
+    };
+
     const handleDeleteCheckpoint = async (checkpointPath: string) => {
         try {
             await invoke('delete_resource_command', {
@@ -543,14 +786,18 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
             }
         };
 
-        setDownloadTasks(prev => [...prev, {
-            id: taskId,
-            name: selectedRepo,
-            progress: 0,
-            status: 'downloading',
-            type: hfType,
-            onCancel: handleCancel
-        }]);
+        // Use setTimeout to avoid synchronous state update conflict (Error #310)
+        setTimeout(() => {
+            setDownloadTasks(prev => [...prev, {
+                id: taskId,
+                name: selectedRepo,
+                progress: 0,
+                status: 'downloading',
+                type: hfType,
+                onCancel: handleCancel
+            }]);
+        }, 0);
+
         setShowFindNew(false);
 
         try {
@@ -592,62 +839,7 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         datasets: resources.filter(r => r.type === 'dataset'),
     }), [resources]);
 
-    // --- Render Helpers ---
-    const renderResourceRow = (r: Resource) => (
-        <div key={r.path} className="rd-item">
-            <div
-                className={`rd-item-select ${selectedPaths.has(r.path) ? 'selected' : ''}`}
-                onClick={() => toggleSelection(r.path)}
-            >
-                {selectedPaths.has(r.path) ? <Check size={20} /> : <Square size={20} />}
-            </div>
 
-            <div className="rd-item-icon">
-                {r.type === 'gguf' ? <Package size={22} /> :
-                    r.type === 'lora' ? <Layers size={22} /> :
-                        r.type === 'dataset' ? <Database size={22} /> : <Brain size={22} />}
-            </div>
-
-            <div className="rd-item-details">
-                <div className="rd-item-name" title={r.name}>{r.name}</div>
-                <div className="rd-item-meta">
-                    <span>{r.size}</span>
-                    {r.quantization && <span className="rd-badge blue">{r.quantization}</span>}
-                    {r.is_mmproj && <span className="rd-badge purple">Vision</span>}
-
-                    {/* Dataset Specific Badges & Actions */}
-                    {r.type === 'dataset' && (
-                        <>
-                            {r.dataset_format && <span className="rd-badge blue">{r.dataset_format.toUpperCase()}</span>}
-                            {r.is_processed ? (
-                                <span className="rd-badge green flex items-center gap-1">
-                                    <Check size={10} /> Ready for Use
-                                </span>
-                            ) : (
-                                <span className="rd-badge gray">Raw</span>
-                            )}
-                        </>
-                    )}
-                </div>
-            </div>
-
-            {/* Dataset Convert Action */}
-            {r.type === 'dataset' && !r.is_processed && (
-                <button
-                    className="rd-action-btn"
-                    title="Convert to Arrow"
-                    onClick={() => handleConvertDataset(r)}
-                    disabled={convertingMap[r.path]}
-                >
-                    {convertingMap[r.path] ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                </button>
-            )}
-
-            <button onClick={() => handleDelete(r)} className="rd-delete-btn" title="Delete">
-                <Trash2 size={18} />
-            </button>
-        </div>
-    );
 
     return (
         <div className="rd-container">
@@ -752,7 +944,22 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                     {sections.models && (
                         <div className="rd-section-body">
                             <div className="rd-grid">
-                                {localModels.map(renderResourceRow)}
+                                {localModels.map(r => (
+                                    <ResourceRow
+                                        key={r.path}
+                                        resource={r}
+                                        isExpanded={expandedResourceId === r.path}
+                                        details={expandedFiles[r.path]}
+                                        isSelected={selectedPaths.has(r.path)}
+                                        toggleSelection={toggleSelection}
+                                        handleExpandResource={handleExpandResource}
+                                        handleConvertDataset={handleConvertDataset}
+                                        handleDelete={handleDelete}
+                                        handleDownloadSingleFile={handleDownloadSingleFile}
+                                        converting={convertingMap[r.path]}
+                                        loadingExpansion={loadingExpansion}
+                                    />
+                                ))}
                                 {localModels.length === 0 && <span className="text-muted italic">No models found.</span>}
                             </div>
                         </div>
@@ -867,7 +1074,22 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                     {sections.datasets && (
                         <div className="rd-section-body">
                             <div className="rd-grid">
-                                {datasets.map(renderResourceRow)}
+                                {datasets.map(r => (
+                                    <ResourceRow
+                                        key={r.path}
+                                        resource={r}
+                                        isExpanded={expandedResourceId === r.path}
+                                        details={expandedFiles[r.path]}
+                                        isSelected={selectedPaths.has(r.path)}
+                                        toggleSelection={toggleSelection}
+                                        handleExpandResource={handleExpandResource}
+                                        handleConvertDataset={handleConvertDataset}
+                                        handleDelete={handleDelete}
+                                        handleDownloadSingleFile={handleDownloadSingleFile}
+                                        converting={convertingMap[r.path]}
+                                        loadingExpansion={loadingExpansion}
+                                    />
+                                ))}
                                 {datasets.length === 0 && <span className="text-muted italic">No datasets found.</span>}
                             </div>
                         </div>
@@ -887,13 +1109,13 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                             <div className="fn-toggle">
                                 <div
                                     className={`fn-toggle-opt ${hfType === 'model' ? 'active' : ''}`}
-                                    onClick={() => { setHfType('model'); setHfResults([]); setHfQuery(''); }}
+                                    onClick={() => setHfType('model')}
                                 >
                                     Models
                                 </div>
                                 <div
                                     className={`fn-toggle-opt ${hfType === 'dataset' ? 'active' : ''}`}
-                                    onClick={() => { setHfType('dataset'); setHfResults([]); setHfQuery(''); }}
+                                    onClick={() => setHfType('dataset')}
                                 >
                                     Datasets
                                 </div>
@@ -927,7 +1149,10 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                     className={`fn-result-item ${selectedRepo === res.id ? 'selected' : ''}`}
                                     onClick={() => selectRepo(res.id)}
                                 >
-                                    <div className="fn-result-title">{res.name}</div>
+                                    <div className="fn-result-title">
+                                        {res.name}
+                                        {res.author && <span className="fn-result-author"> by {res.author}</span>}
+                                    </div>
                                     <div className="fn-result-stats">
                                         <span>⬇ {res.downloads.toLocaleString()}</span>
                                         <span>♥ {res.likes.toLocaleString()}</span>
