@@ -13,6 +13,7 @@ export const Card: React.FC<CardProps> = ({
     hoverable = false,
     active = false,
     glass = true,
+    style,
     ...props
 }) => {
     const classes = [
@@ -24,7 +25,7 @@ export const Card: React.FC<CardProps> = ({
     ].filter(Boolean).join(' ');
 
     return (
-        <div className={classes} {...props}>
+        <div className={classes} style={style} {...props}>
             {children}
         </div>
     );

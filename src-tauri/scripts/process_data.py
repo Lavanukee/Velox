@@ -3,11 +3,16 @@ import json
 import random
 import re
 import argparse
+import sys
 from transformers import AutoProcessor, AutoTokenizer
 from datasets import Dataset
 from PIL import Image, UnidentifiedImageError
 import requests
 from huggingface_hub import configure_http_backend
+
+# Configure encoding for Windows consoles
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 
 # --- SSL VERIFICATION FIX ---
 def backend_factory() -> requests.Session:
@@ -45,7 +50,7 @@ def is_image_valid(example, image_root):
 
 def create_structured_example(examples, processor, image_root):
     """
-    Convert collected data to training format.
+    Convert collected data to Unsloth VLM training format.
     
     Input format:
     {
@@ -56,13 +61,21 @@ def create_structured_example(examples, processor, image_root):
         ]
     }
     
-    Output format:
+    Output format for UnslothVisionDataCollator:
     {
-        "text": "formatted chat template",
-        "image": PIL.Image
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": <PIL Image>},
+                    {"type": "text", "text": "Click the submit button"}
+                ]
+            },
+            {"role": "assistant", "content": "<tools>click(500,300)</tools>"}
+        ]
     }
     """
-    texts, images = [], []
+    all_messages = []
     
     for i in range(len(examples['image'])):
         try:
@@ -70,39 +83,27 @@ def create_structured_example(examples, processor, image_root):
             conversations = examples['conversations'][i]
             
             # Validate conversations structure
-            if not conversations or len(conversations) != 2:
-                print(f"Skipping example {i}: Invalid conversation structure")
+            if not conversations:
+                print(f"Skipping example {i}: Empty conversations")
                 continue
             
-            # Get user prompt and assistant response
-            user_msg = conversations[0]
-            assistant_msg = conversations[1]
-            
-            if user_msg['role'] != 'user' or assistant_msg['role'] != 'assistant':
-                print(f"Skipping example {i}: Invalid roles")
-                continue
-            
-            # --- Tool Call Conversion ---
-            # Convert <tool_call> JSON format to <tools>click(x,y)</tools> format
-            assistant_content = assistant_msg['content']
-            match = re.search(r'<tool_call>(.*?)</tool_call>', assistant_content, re.DOTALL)
-            
-            if match:
-                json_str = match.group(1)
-                tool_call_data = json.loads(json_str)
-                
-                if tool_call_data.get('name') == 'computer_use' and tool_call_data['arguments'].get('action') == 'left_click':
-                    x, y = tool_call_data['arguments']['coordinate']
-                    assistant_msg['content'] = f"<tools>click({x},{y})</tools>"
-                else:
-                    print(f"Skipping example {i}: Unsupported tool call format")
-                    continue
-            # If no <tool_call> is found, assume it's already in the correct format or skip if empty/invalid.
-            # The original code handles the case where it's already in <tools> format.
+            # --- Tool Call Conversion (Optional) ---
+            for msg in conversations:
+                if msg['role'] == 'assistant' and '<tool_call>' in msg['content']:
+                    try:
+                        content = msg['content']
+                        match = re.search(r'<tool_call>(.*?)</tool_call>', content, re.DOTALL)
+                        if match:
+                            json_str = match.group(1)
+                            tool_call_data = json.loads(json_str)
+                            if tool_call_data.get('name') == 'computer_use' and tool_call_data['arguments'].get('action') == 'left_click':
+                                x, y = tool_call_data['arguments']['coordinate']
+                                msg['content'] = f"<tools>click({x},{y})</tools>"
+                    except Exception as e:
+                        print(f"Warning: Failed to parse tool call in example {i}: {e}")
             # --- End Tool Call Conversion ---
 
             # Load image
-            # Remove leading 'images/' if present, as image_root already points to the images directory
             if image_path.startswith('images/'):
                 image_path = image_path[len('images/'):]
 
@@ -113,28 +114,38 @@ def create_structured_example(examples, processor, image_root):
             
             image = Image.open(full_image_path).convert("RGB")
             
-            # Build conversation for chat template
-            # User message already has <image> tag from data collection
-            conversation = [
-                {"role": "user", "content": user_msg['content']},
-                {"role": "assistant", "content": assistant_msg['content']}
-            ]
+            # Build multimodal messages for Qwen3-VL / Unsloth
+            formatted_messages = []
+            for msg in conversations:
+                role = msg['role']
+                content = msg['content']
+                
+                if role == 'user' and '<image>' in content:
+                    # Replace <image> placeholder with actual multimodal content
+                    text_part = content.replace('<image>', '').strip()
+                    formatted_messages.append({
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": image},
+                            {"type": "text", "text": text_part if text_part else "Describe this image."}
+                        ]
+                    })
+                else:
+                    # Plain text message (usually assistant response)
+                    formatted_messages.append({
+                        "role": role,
+                        "content": content
+                    })
             
-            # Apply chat template
-            text = processor.tokenizer.apply_chat_template(
-                conversation, 
-                tokenize=False, 
-                add_generation_prompt=False
-            )
-            
-            texts.append(text)
-            images.append(image)
+            all_messages.append(formatted_messages)
             
         except Exception as e:
             print(f"Skipping example {i}. Reason: {e}")
             continue
     
-    return {"image": images, "text": texts}
+    # Return 'messages' column for UnslothVisionDataCollator
+    return {"messages": all_messages}
+
 
 
 def load_jsonl_dataset(jsonl_path):
@@ -178,7 +189,7 @@ def main(args):
     processor = AutoProcessor.from_pretrained(args.model_name)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     processor.tokenizer = tokenizer
-    print("✅ Tokenizer and processor loaded")
+    print("[OK] Tokenizer and processor loaded")
     
     print(f"\nLoading dataset from '{json_path}'...")
     data = load_jsonl_dataset(json_path)
@@ -186,7 +197,7 @@ def main(args):
     
     # Create HuggingFace Dataset
     dataset = Dataset.from_list(data)
-    print(f"✅ Dataset created with {len(dataset)} examples")
+    print(f"[OK] Dataset created with {len(dataset)} examples")
     
     # Show sample
     print("\n" + "="*60)
@@ -206,10 +217,10 @@ def main(args):
         fn_kwargs=filter_kwargs,
         num_proc=args.num_workers
     )
-    print(f"✅ {len(dataset)} examples with valid images")
+    print(f"[OK] {len(dataset)} examples with valid images")
 
     if len(dataset) == 0:
-        print("\n❌ CRITICAL ERROR: No examples remained after filtering.")
+        print("\n[ERROR] CRITICAL ERROR: No examples remained after filtering.")
         print("Check that your --image_root is correct and images exist.")
         return
     
@@ -222,12 +233,12 @@ def main(args):
         )
         train_dataset = split_dataset['train']
         eval_dataset = split_dataset['test']
-        print(f"✅ Train: {len(train_dataset)} examples")
-        print(f"✅ Eval: {len(eval_dataset)} examples")
+        print(f"[OK] Train: {len(train_dataset)} examples")
+        print(f"[OK] Eval: {len(eval_dataset)} examples")
     else:
         train_dataset = dataset
         eval_dataset = None
-        print(f"✅ Using all {len(train_dataset)} examples for training")
+        print(f"[OK] Using all {len(train_dataset)} examples for training")
 
     print("\nCreating structured training dataset...")
     original_columns = train_dataset.column_names
@@ -245,14 +256,19 @@ def main(args):
         remove_columns=original_columns
     )
     
-    print(f"✅ Processed {len(processed_train)} training examples")
+    print(f"[OK] Processed {len(processed_train)} training examples")
     
     # Show processed sample
     print("\n" + "="*60)
     print("Sample Processed Entry:")
     print("="*60)
     sample = processed_train[0]
-    print(f"Text (first 500 chars):\n{sample['text'][:500]}...")
+    if 'messages' in sample:
+        print(f"Messages: {json.dumps(str(sample['messages'])[:500], indent=2)}...")
+    elif 'text' in sample:
+        print(f"Text (first 500 chars):\n{sample['text'][:500]}...")
+    else:
+        print(f"Available keys: {list(sample.keys())}")
 
     print("="*60)
     
@@ -260,7 +276,7 @@ def main(args):
     print(f"\nSaving training data to {args.output_dir}...")
     os.makedirs(args.output_dir, exist_ok=True) # Ensure output directory exists
     processed_train.save_to_disk(args.output_dir)
-    print("✅ Training data saved")
+    print("[OK] Training data saved")
     
     # Process and save eval data if exists
     if eval_dataset:
@@ -275,14 +291,14 @@ def main(args):
             remove_columns=original_columns
         )
         
-        print(f"✅ Processed {len(processed_eval)} eval examples")
+        print(f"[OK] Processed {len(processed_eval)} eval examples")
         print(f"Saving eval data to {eval_output_dir}...")
         os.makedirs(eval_output_dir, exist_ok=True) # Ensure eval output directory exists
         processed_eval.save_to_disk(eval_output_dir)
-        print("✅ Eval data saved")
+        print("[OK] Eval data saved")
     
     print("\n" + "="*60)
-    print("🎉 Data processing complete!")
+    print("[SUCCESS] Data processing complete!")
     print("="*60)
     print("\nNext steps:")
     print(f"1. Training data ready at: {args.output_dir}")
@@ -323,7 +339,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=12,
+        default=4,
         help="Number of parallel workers"
     )
     parser.add_argument(

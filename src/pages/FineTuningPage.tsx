@@ -22,7 +22,8 @@ import {
     Minus,
     Plus,
     ExternalLink,
-    Database
+    Database,
+    Check
 } from 'lucide-react'; // Modified lucide-react imports
 
 interface FineTuningPageProps {
@@ -52,15 +53,59 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
         ftInitMessage: initMessage, setFtInitMessage: setInitMessage,
         // Setup state from context (persists across tab navigation)
         ftSetupComplete: setupComplete,
+        isConvertingMap,
+        resources,
         runGlobalSetup
     } = useApp();
 
     // Resources
     const [availableModels, setAvailableModels] = useState<string[]>([]);
-    const [availableDatasets, setAvailableDatasets] = useState<string[]>([]);
+
+    const availableDatasets = resources
+        .filter(r => r.type === 'dataset')
+        .map(r => r.path);
+
+    // Multi-dataset selection (new feature)
+    const [selectedDatasets, setSelectedDatasets] = useState<string[]>([]);
+
+    // Training method and adapter type
+    const [trainingMethod, setTrainingMethod] = useState<'sft' | 'dpo'>('sft');
+    const [adapterType, setAdapterType] = useState<'lora' | 'dora'>('lora');
+
+    // Advanced mode toggle (Simple vs Power User)
+    const [advancedMode, setAdvancedMode] = useState(userMode === 'power');
+
+    const formatCount = (num: number | null | undefined): string => {
+        if (num === undefined || num === null) return '';
+        if (num < 1000) return num.toString();
+        if (num < 1000000) return (num / 1000).toFixed(1) + 'k';
+        return (num / 1000000).toFixed(1) + 'M';
+    };
+
+    useEffect(() => {
+        setAdvancedMode(userMode === 'power');
+    }, [userMode]);
+
+    // Additional hyperparameters (Power User mode)
+    const [gradientAccumulationSteps, setGradientAccumulationSteps] = useState(4);
+    const [warmupRatio, setWarmupRatio] = useState(0.03);
+    const [weightDecay, setWeightDecay] = useState(0.01);
+    const [optimizer, setOptimizer] = useState<'adamw' | 'adamw_8bit' | 'paged_adamw_8bit'>('adamw_8bit');
+    const [lrSchedulerType, setLrSchedulerType] = useState<'linear' | 'cosine' | 'constant'>('linear');
 
     // UI Local State
     const [tbZoom, setTbZoom] = useState(1);
+    const [refreshKey, setRefreshKey] = useState(0);
+
+    useEffect(() => {
+        let interval: any;
+        if (trainingStatus === 'training' && tensorboardUrl) {
+            interval = setInterval(() => {
+                setRefreshKey(prev => prev + 1);
+            }, 30000); // 30 second auto-reload
+        }
+        return () => clearInterval(interval);
+    }, [trainingStatus, tensorboardUrl]);
 
     // --- Event Listeners ---
     useEffect(() => {
@@ -120,10 +165,8 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
     const loadResources = async () => {
         try {
             const models: string[] = await invoke('list_finetuning_models_command');
-            const datasets: string[] = await invoke('list_dataset_folders_command');
             const projects: string[] = await invoke('list_training_projects_command');
             setAvailableModels(models);
-            setAvailableDatasets(datasets);
             setExistingProjects(projects);
         } catch (error) {
             addLogMessage(`ERROR loading resources: ${error} `);
@@ -182,8 +225,21 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             addNotification('Please enter a project name', 'error');
             return;
         }
-        if (!selectedModel || (!selectedDataset && !localDatasetPath)) {
-            addNotification('Please select a model and dataset', 'error');
+
+        // Get all selected datasets (from multi-select or legacy single select)
+        const datasetsToUse = selectedDatasets.length > 0
+            ? selectedDatasets
+            : (localDatasetPath ? [localDatasetPath] : (selectedDataset ? [selectedDataset] : []));
+
+        if (!selectedModel || datasetsToUse.length === 0) {
+            addNotification('Please select a model and at least one dataset', 'error');
+            return;
+        }
+
+        // Check if any selected dataset is still being converted
+        const convertingDs = datasetsToUse.find(ds => isConvertingMap[ds]);
+        if (convertingDs) {
+            addNotification(`Dataset "${convertingDs}" is still being processed. Please wait.`, 'info');
             return;
         }
 
@@ -197,13 +253,21 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             const result = await invoke('start_training_command', {
                 projectName: ftProjectName.trim(),
                 modelPath: selectedModel,
-                datasetPath: localDatasetPath || selectedDataset,
+                datasetPaths: datasetsToUse,  // Changed to array
                 numEpochs,
                 batchSize,
                 learningRate,
                 loraR,
                 loraAlpha,
                 maxSeqLength,
+                // New optional parameters
+                trainingMethod: trainingMethod,
+                adapterType: adapterType,
+                gradientAccumulationSteps: advancedMode ? gradientAccumulationSteps : undefined,
+                warmupRatio: advancedMode ? warmupRatio : undefined,
+                weightDecay: advancedMode ? weightDecay : undefined,
+                optimizer: advancedMode ? optimizer : undefined,
+                lrSchedulerType: advancedMode ? lrSchedulerType : undefined,
             });
 
             const port = (result as any).tensorboard_port;
@@ -222,7 +286,6 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             setTimeout(() => addNotification('Training started successfully', 'success'), 500);
         } catch (error) {
             addLogMessage(`ERROR starting training: ${error}`);
-            addNotification('Failed to start training', 'error');
             addNotification('Failed to start training', 'error');
             setIsTraining(false);
             setTrainingStatus('idle');
@@ -286,12 +349,13 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                         border: '1px solid rgba(255,255,255,0.06)',
                         cursor: 'pointer',
                         transition: 'all 0.24s ease',
-                        borderTopLeftRadius: 8,
+                        borderRadius: 8,
                         borderBottomLeftRadius: 0,
                         borderTopRightRadius: 0,
                         borderBottomRightRadius: 5,
                         marginRight: 1
                     }}
+                    className={activeTab === 'config' ? 'btn-tab-active' : 'btn-tab'}
                     onMouseEnter={(e) => {
                         if (activeTab !== 'config') {
                             (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.06)';
@@ -346,7 +410,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px' }}>
                     {/* Left Column: Selection */}
                     <div className="space-y-6" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                        <Card>
+                        <Card style={{ position: 'relative', zIndex: 30 }}>
                             <div className="flex items-center gap-3 mb-4">
                                 <BrainCircuit className="text-accent-primary" size={24} />
                                 <h3 className="text-lg font-semibold">Model Selection</h3>
@@ -504,15 +568,106 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
 
                             <div className="space-y-4">
                                 {!hfDatasetId && !localDatasetPath ? (
-                                    <Select
-                                        label="Choose from downloaded datasets"
-                                        options={[
-                                            { value: '', label: 'Select a dataset...' },
-                                            ...availableDatasets.map(d => ({ value: d, label: d }))
-                                        ]}
-                                        value={selectedDataset}
-                                        onChange={(val) => setSelectedDataset(val)}
-                                    />
+                                    <div>
+                                        <label className="text-sm font-medium mb-2 block">
+                                            Select Datasets {selectedDatasets.length > 0 && `(${selectedDatasets.length} selected)`}
+                                        </label>
+                                        <div style={{
+                                            maxHeight: '200px',
+                                            overflowY: 'auto',
+                                            background: 'rgba(0,0,0,0.2)',
+                                            borderRadius: '8px',
+                                            padding: '8px',
+                                            border: '1px solid rgba(255,255,255,0.1)'
+                                        }}>
+                                            {availableDatasets.length === 0 ? (
+                                                <div style={{ padding: '16px', textAlign: 'center', color: '#9ca3af', fontSize: '13px' }}>
+                                                    No datasets available. Download or import a dataset first.
+                                                </div>
+                                            ) : (
+                                                availableDatasets.map(dataset => (
+                                                    <label
+                                                        key={dataset}
+                                                        style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '10px',
+                                                            padding: '8px 12px',
+                                                            cursor: 'pointer',
+                                                            borderRadius: '6px',
+                                                            background: selectedDatasets.includes(dataset) ? 'rgba(59,130,246,0.1)' : 'transparent',
+                                                            border: selectedDatasets.includes(dataset) ? '1px solid rgba(59,130,246,0.3)' : '1px solid transparent',
+                                                            marginBottom: '4px'
+                                                        }}
+                                                    >
+                                                        <div
+                                                            style={{
+                                                                width: '20px',
+                                                                height: '20px',
+                                                                minWidth: '20px',
+                                                                minHeight: '20px',
+                                                                borderRadius: '4px',
+                                                                border: selectedDatasets.includes(dataset) ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.2)',
+                                                                background: selectedDatasets.includes(dataset) ? '#3b82f6' : 'transparent',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                transition: 'all 0.2s',
+                                                                flexShrink: 0
+                                                            }}
+                                                        >
+                                                            {selectedDatasets.includes(dataset) && <Check size={14} strokeWidth={3} color="white" />}
+                                                        </div>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={selectedDatasets.includes(dataset)}
+                                                            onChange={(e) => {
+                                                                if (e.target.checked) {
+                                                                    setSelectedDatasets(prev => [...prev, dataset]);
+                                                                    if (selectedDatasets.length === 0) setSelectedDataset(dataset);
+                                                                } else {
+                                                                    setSelectedDatasets(prev => prev.filter(d => d !== dataset));
+                                                                    if (selectedDataset === dataset) setSelectedDataset('');
+                                                                }
+                                                            }}
+                                                            style={{ display: 'none' }}
+                                                        />
+                                                        <span style={{
+                                                            fontSize: '13px',
+                                                            color: selectedDatasets.includes(dataset) ? '#60a5fa' : '#e5e7eb',
+                                                            overflow: 'hidden',
+                                                            textOverflow: 'ellipsis',
+                                                            whiteSpace: 'nowrap'
+                                                        }}>
+                                                            {dataset.split('/').pop() || dataset}
+                                                        </span>
+                                                        {(() => {
+                                                            const r = resources.find(res => res.path === dataset);
+                                                            return (
+                                                                <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
+                                                                    {r?.count !== undefined && (
+                                                                        <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.1)', color: '#9ca3af' }}>
+                                                                            {formatCount(r.count)}
+                                                                        </span>
+                                                                    )}
+                                                                    {r?.modalities?.map(m => (
+                                                                        <span key={m} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: m === 'Vision' ? 'rgba(167, 139, 250, 0.2)' : 'rgba(255,255,255,0.1)', color: m === 'Vision' ? '#c4b5fd' : '#9ca3af' }}>
+                                                                            {m}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            );
+                                                        })()}
+                                                    </label>
+                                                ))
+                                            )}
+                                        </div>
+                                        {selectedDatasets.length > 1 && (
+                                            <p className="text-xs text-secondary mt-2" style={{ color: '#60a5fa' }}>
+                                                ℹ️ Multiple datasets will be merged and shuffled during training
+                                            </p>
+                                        )}
+                                    </div>
                                 ) : hfDatasetId ? (
                                     <div className="flex gap-2">
                                         <Input
@@ -591,9 +746,159 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                 onChange={(e) => setFtProjectName(e.target.value)}
                                 tooltip="Unique identifier for this training run. Saves all checkpoints and logs here."
                             />
-                            <p className="text-xs text-gray-500 mt-2">
+                            <p className="text-xs text-secondary mt-2">
                                 All checkpoints and outputs will be saved under this project name
                             </p>
+                        </Card>
+
+                        {/* Training Options */}
+                        <Card>
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="flex items-center gap-3">
+                                    <Activity className="text-purple-500" size={24} />
+                                    <h3 className="text-lg font-semibold">Training Options</h3>
+                                </div>
+                                <div
+                                    className="ft-mode-toggle"
+                                    onClick={() => setAdvancedMode(!advancedMode)}
+                                    style={{
+                                        position: 'relative',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        background: 'rgba(255,255,255,0.03)',
+                                        borderRadius: '12px',
+                                        padding: '4px',
+                                        cursor: 'pointer',
+                                        width: '160px',
+                                        height: '32px',
+                                        border: '1px solid rgba(255,255,255,0.08)',
+                                        userSelect: 'none',
+                                        overflow: 'hidden'
+                                    }}
+                                >
+                                    {/* Sliding Purple Glass */}
+                                    <div style={{
+                                        position: 'absolute',
+                                        left: advancedMode ? 'calc(50% + 2px)' : '4px',
+                                        width: 'calc(50% - 6px)',
+                                        height: 'calc(100% - 8px)',
+                                        background: 'rgba(139, 92, 246, 0.3)',
+                                        backdropFilter: 'blur(8px)',
+                                        boxShadow: '0 0 15px rgba(139, 92, 246, 0.2)',
+                                        borderRadius: '8px',
+                                        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                                        zIndex: 1,
+                                        border: '1px solid rgba(139, 92, 246, 0.4)'
+                                    }} />
+
+                                    <div style={{
+                                        flex: 1,
+                                        textAlign: 'center',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        zIndex: 2,
+                                        color: !advancedMode ? '#fff' : '#9ca3af',
+                                        transition: 'color 0.2s',
+                                        letterSpacing: '0.05em'
+                                    }}>SIMPLE</div>
+                                    <div style={{
+                                        flex: 1,
+                                        textAlign: 'center',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        zIndex: 2,
+                                        color: advancedMode ? '#fff' : '#9ca3af',
+                                        transition: 'color 0.2s',
+                                        letterSpacing: '0.05em'
+                                    }}>ADVANCED</div>
+                                </div>
+                            </div>
+
+                            {/* Training Method Toggle */}
+                            <div style={{ marginBottom: '16px' }}>
+                                <label className="text-sm font-medium mb-2 block">Training Method</label>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button
+                                        onClick={() => setTrainingMethod('sft')}
+                                        style={{
+                                            flex: 1,
+                                            padding: '10px 16px',
+                                            fontSize: '13px',
+                                            fontWeight: 500,
+                                            border: trainingMethod === 'sft' ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.1)',
+                                            background: trainingMethod === 'sft' ? 'rgba(59,130,246,0.15)' : 'rgba(255,255,255,0.03)',
+                                            color: trainingMethod === 'sft' ? '#60a5fa' : '#9ca3af',
+                                            borderRadius: '8px',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s'
+                                        }}
+                                    >
+                                        <div style={{ fontWeight: 600 }}>SFT</div>
+                                        <div style={{ fontSize: '11px', opacity: 0.7 }}>Supervised Fine-Tuning</div>
+                                    </button>
+                                    <button
+                                        onClick={() => setTrainingMethod('dpo')}
+                                        style={{
+                                            flex: 1,
+                                            padding: '10px 16px',
+                                            fontSize: '13px',
+                                            fontWeight: 500,
+                                            border: trainingMethod === 'dpo' ? '1px solid #8b5cf6' : '1px solid rgba(255,255,255,0.1)',
+                                            background: trainingMethod === 'dpo' ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.03)',
+                                            color: trainingMethod === 'dpo' ? '#a78bfa' : '#9ca3af',
+                                            borderRadius: '8px',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s'
+                                        }}
+                                    >
+                                        <div style={{ fontWeight: 600 }}>DPO</div>
+                                        <div style={{ fontSize: '11px', opacity: 0.7 }}>Preference Optimization</div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Adapter Type Toggle */}
+                            <div>
+                                <label className="text-sm font-medium mb-2 block">Adapter Type</label>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button
+                                        onClick={() => setAdapterType('lora')}
+                                        style={{
+                                            flex: 1,
+                                            padding: '10px 16px',
+                                            fontSize: '13px',
+                                            fontWeight: 500,
+                                            border: adapterType === 'lora' ? '1px solid #10b981' : '1px solid rgba(255,255,255,0.1)',
+                                            background: adapterType === 'lora' ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.03)',
+                                            color: adapterType === 'lora' ? '#34d399' : '#9ca3af',
+                                            borderRadius: '8px',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s'
+                                        }}
+                                    >
+                                        <div style={{ fontWeight: 600 }}>LoRA</div>
+                                        <div style={{ fontSize: '11px', opacity: 0.7 }}>Low-Rank Adaptation</div>
+                                    </button>
+                                    <button
+                                        onClick={() => setAdapterType('dora')}
+                                        style={{
+                                            flex: 1,
+                                            padding: '10px 16px',
+                                            fontSize: '13px',
+                                            fontWeight: 500,
+                                            border: adapterType === 'dora' ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.1)',
+                                            background: adapterType === 'dora' ? 'rgba(245,158,11,0.15)' : 'rgba(255,255,255,0.03)',
+                                            color: adapterType === 'dora' ? '#fbbf24' : '#9ca3af',
+                                            borderRadius: '8px',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s'
+                                        }}
+                                    >
+                                        <div style={{ fontWeight: 600 }}>DoRA</div>
+                                        <div style={{ fontSize: '11px', opacity: 0.7 }}>Weight-Decomposed</div>
+                                    </button>
+                                </div>
+                            </div>
                         </Card>
 
                         <Card>
@@ -649,6 +954,56 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                             onChange={(e) => setLoraAlpha(Number(e.target.value))}
                                             tooltip="Scaling factor for LoRA weights. Common practice is to set it to 2x the Rank."
                                         />
+
+                                        {advancedMode && (
+                                            <>
+                                                <Input
+                                                    label="Grad Accum"
+                                                    type="number"
+                                                    value={gradientAccumulationSteps}
+                                                    onChange={(e) => setGradientAccumulationSteps(Number(e.target.value))}
+                                                    tooltip="Number of steps to accumulate gradients before updating weights. Helps with memory constraints."
+                                                />
+                                                <Input
+                                                    label="Warmup Ratio"
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={warmupRatio}
+                                                    onChange={(e) => setWarmupRatio(Number(e.target.value))}
+                                                    tooltip="Fraction of total training steps to increase learning rate linearly."
+                                                />
+                                                <Input
+                                                    label="Weight Decay"
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={weightDecay}
+                                                    onChange={(e) => setWeightDecay(Number(e.target.value))}
+                                                    tooltip="Regularization technique that helps prevent overfitting by penalizing large weights."
+                                                />
+                                                <Select
+                                                    label="Optimizer"
+                                                    options={[
+                                                        { value: 'adamw', label: 'AdamW' },
+                                                        { value: 'adamw_8bit', label: 'AdamW 8-bit' },
+                                                        { value: 'paged_adamw_8bit', label: 'Paged AdamW 8-bit' }
+                                                    ]}
+                                                    value={optimizer}
+                                                    onChange={(val) => setOptimizer(val as any)}
+                                                    tooltip="The optimization algorithm used to update model weights."
+                                                />
+                                                <Select
+                                                    label="LR Scheduler"
+                                                    options={[
+                                                        { value: 'linear', label: 'Linear' },
+                                                        { value: 'cosine', label: 'Cosine' },
+                                                        { value: 'constant', label: 'Constant' }
+                                                    ]}
+                                                    value={lrSchedulerType}
+                                                    onChange={(val) => setLrSchedulerType(val as any)}
+                                                    tooltip="Strategy for adjusting the learning rate during training."
+                                                />
+                                            </>
+                                        )}
                                     </>
                                 )}
                             </div>
@@ -666,7 +1021,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                 size="lg"
                                 className="w-full"
                                 onClick={handleStartTraining}
-                                disabled={isTraining || !selectedModel || (!selectedDataset && !localDatasetPath)}
+                                disabled={isTraining || !selectedModel || (selectedDatasets.length === 0 && !selectedDataset && !localDatasetPath)}
                                 leftIcon={<Play size={20} />}
                                 style={{ width: '100%' }}
                             >
@@ -678,7 +1033,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             )}
 
             {activeTab === 'training' && (
-                <div className="flex-1 flex flex-col gap-4" style={{ height: 'calc(100vh - 180px)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="flex-1 flex flex-col gap-4" style={{ height: 'calc(100vh - 160px)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     <div className="flex justify-between items-center p-4 rounded-lg border" style={{
                         background: 'linear-gradient(135deg, rgba(28, 28, 36, 0.6) 0%, rgba(30, 28, 38, 0.6) 100%)',
                         padding: '16px',
@@ -741,9 +1096,12 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                             {/* Iframe Container */}
                             <div className="flex-1 w-full bg-[#1a1a1f] overflow-hidden relative" style={{ minHeight: '600px' }}>
                                 <iframe
+                                    key={refreshKey}
                                     src={tensorboardUrl}
-                                    className="w-full h-full border-none"
+                                    className="flex-1 w-full border-none"
+                                    title="TensorBoard"
                                     style={{
+                                        background: 'white',
                                         transform: `scale(${tbZoom})`,
                                         transformOrigin: 'top left',
                                         width: `${100 / tbZoom}%`,

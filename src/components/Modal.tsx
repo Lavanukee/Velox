@@ -9,6 +9,7 @@ interface ModalProps {
     title: string;
     children: React.ReactNode;
     footer?: React.ReactNode;
+    maxWidth?: string;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -16,7 +17,8 @@ export const Modal: React.FC<ModalProps> = ({
     onClose,
     title,
     children,
-    footer
+    footer,
+    maxWidth = '500px'
 }) => {
     useEffect(() => {
         const handleEsc = (e: KeyboardEvent) => {
@@ -29,21 +31,48 @@ export const Modal: React.FC<ModalProps> = ({
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}>
-            <div className="bg-panel border border-white/10 rounded-xl shadow-2xl w-full max-w-md overflow-hidden glass" style={{ background: '#121216', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '0', width: '100%', maxWidth: '500px' }}>
-                <div className="flex items-center justify-between p-4 border-b border-white/5" style={{ display: 'flex', justifyContent: 'space-between', padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <h3 className="text-lg font-semibold text-white m-0">{title}</h3>
-                    <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors bg-transparent border-none cursor-pointer">
+        <div
+            className="modal-overlay animate-fade-in"
+            onClick={(e) => e.target === e.currentTarget && onClose()}
+        >
+            <div
+                className="modal-panel"
+                style={{ maxWidth }}
+            >
+                <div className="modal-header">
+                    <h3 style={{
+                        fontSize: '1.125rem',
+                        fontWeight: 600,
+                        color: 'var(--text-main)',
+                        margin: 0
+                    }}>
+                        {title}
+                    </h3>
+                    <button
+                        onClick={onClose}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            padding: '4px',
+                            borderRadius: '6px',
+                            display: 'flex',
+                            transition: 'all 0.2s'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-main)'}
+                        onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+                    >
                         <X size={20} />
                     </button>
                 </div>
 
-                <div className="p-6" style={{ padding: '24px' }}>
+                <div className="modal-body">
                     {children}
                 </div>
 
                 {footer && (
-                    <div className="flex justify-end gap-3 p-4 bg-white/5 border-t border-white/5" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', padding: '16px', background: 'rgba(255,255,255,0.02)', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div className="modal-footer">
                         {footer}
                     </div>
                 )}

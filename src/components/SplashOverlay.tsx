@@ -122,7 +122,10 @@ export const SplashOverlay: React.FC<SplashOverlayProps> = ({
                 return prev;
             });
 
-            if (progress >= 100 && smoothProgress >= 99.9 && message === "SYSTEM_READY") {
+            // Check for completion - use case-insensitive check
+            const isSystemReady = message?.toUpperCase().includes("SYSTEM_READY") ||
+                message?.toUpperCase().includes("READY");
+            if (progress >= 100 && smoothProgress >= 95 && isSystemReady) {
                 setIsComplete(true);
                 return;
             }
@@ -132,7 +135,7 @@ export const SplashOverlay: React.FC<SplashOverlayProps> = ({
 
         animationFrame = requestAnimationFrame(animate);
         return () => cancelAnimationFrame(animationFrame);
-    }, [progress, isVisible, smoothProgress]);
+    }, [progress, isVisible, smoothProgress, message]);
 
     useEffect(() => {
         if (isComplete && isVisible && onComplete) {
@@ -142,6 +145,26 @@ export const SplashOverlay: React.FC<SplashOverlayProps> = ({
             return () => clearTimeout(timer);
         }
     }, [isComplete, isVisible, onComplete]);
+
+    // Safety Force Exit: Ensure we never get stuck at 100% SYSTEM_READY
+    useEffect(() => {
+        const isSystemReady = message?.toUpperCase().includes("SYSTEM_READY") ||
+            message?.toUpperCase().includes("READY");
+
+        if (isSystemReady && progress >= 100) {
+            // Ensure UI is in final state
+            setIsComplete(true);
+            setSmoothProgress(100);
+
+            const timer = setTimeout(() => {
+                if (onComplete && isVisible) {
+                    console.log("Splash Safety: Forcing completion after timeout.");
+                    onComplete();
+                }
+            }, 1500); // Reduced to 1.5s for faster exit
+            return () => clearTimeout(timer);
+        }
+    }, [message, progress, onComplete, isVisible]);
 
     const formatBytes = (bytes: number) => {
         if (bytes === 0) return "0.0 GB";

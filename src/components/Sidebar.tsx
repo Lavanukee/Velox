@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
     LayoutDashboard,
     Wrench,
@@ -7,11 +8,15 @@ import {
     MessageSquare,
     TerminalSquare,
     Settings,
-    ChevronLeft,
-    ChevronRight
+    PanelLeft,
+    Sun,
+    Moon
 } from 'lucide-react';
 import { AppView, DownloadTask } from '../types';
 import { SidebarDownloads } from './SidebarDownloads';
+import { SidebarStatus } from './SidebarStatus';
+import { useApp } from '../context/AppContext';
+import { useAppState } from '../context/AppStateContext';
 import '../styles/components.css';
 
 interface SidebarProps {
@@ -22,6 +27,22 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downloadTasks = [] }) => {
     const [isCollapsed, setIsCollapsed] = useState(false);
+    const { colorMode, toggleColorMode, ftIsTraining, ftProjectName } = useApp();
+    const { state, unloadModel } = useAppState();
+    const loadedModels = state.inference.loadedModels;
+
+    const handleStopModel = async (path: string, serverId?: string) => {
+        try {
+            // Determine slot from serverId (default to 0)
+            let slotId = 0;
+            if (serverId === 'server-1') slotId = 1;
+
+            await invoke('stop_llama_server_command', { slotId });
+            unloadModel(path);
+        } catch (error) {
+            console.error('Failed to stop model:', error);
+        }
+    };
 
     const navItems = [
         { view: AppView.Dashboard, label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
@@ -40,49 +61,51 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                 height: '100vh',
                 display: 'flex',
                 flexDirection: 'column',
-                borderRight: '1px solid rgba(255, 255, 255, 0.1)',
-                background: 'linear-gradient(135deg, rgba(12, 12, 16, 0.98) 0%, rgba(14, 12, 18, 0.98) 100%)',
+                borderRight: '1px solid var(--border-subtle)',
+                background: 'var(--bg-surface)',
                 zIndex: 50,
                 transition: 'width 0.3s ease'
             }}
         >
-            {/* Collapse Button */}
+            {/* Sidebar Toggle Area */}
             <div
-                className="p-4 flex items-center justify-center border-b border-white/5"
+                className="p-4 flex items-center border-b border-white/5"
                 style={{
-                    padding: '16px 20px',
-                    borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-                    justifyContent: 'center',
-                    display: 'flex'
+                    padding: '12px 16px',
+                    borderBottom: '1px solid var(--border-subtle)',
+                    justifyContent: isCollapsed ? 'center' : 'space-between',
+                    display: 'flex',
+                    minHeight: '64px'
                 }}
             >
+                {!isCollapsed && <span className="font-bold text-lg tracking-wider bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">VELOX</span>}
                 <button
                     onClick={() => setIsCollapsed(!isCollapsed)}
+                    title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
                     style={{
-                        background: 'rgba(255, 255, 255, 0.08)',
-                        border: '1px solid rgba(255, 255, 255, 0.15)',
-                        borderRadius: '8px',
-                        width: '36px',
-                        height: '36px',
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border-default)',
+                        borderRadius: '6px',
+                        width: '40px',
+                        height: '32px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        color: 'white',
+                        color: 'var(--text-secondary)',
                         cursor: 'pointer',
                         transition: 'all 0.2s',
-                        marginLeft: '10px', // As requested
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+                        boxShadow: 'var(--shadow-3d-sm)'
                     }}
                     onMouseEnter={(e) => {
-                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)';
-                        e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                        e.currentTarget.style.background = 'var(--bg-highlight)';
+                        e.currentTarget.style.color = 'var(--text-main)';
                     }}
                     onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
-                        e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                        e.currentTarget.style.background = 'var(--bg-elevated)';
+                        e.currentTarget.style.color = 'var(--text-secondary)';
                     }}
                 >
-                    {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+                    <PanelLeft size={18} />
                 </button>
             </div>
 
@@ -109,22 +132,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                             justifyContent: isCollapsed ? 'center' : 'flex-start',
                             padding: isCollapsed ? '12px 0' : '12px 16px',
                             borderRadius: '8px',
-                            border: currentView === item.view ? '1px solid rgba(167, 139, 250, 0.3)' : '1px solid transparent',
+                            border: currentView === item.view
+                                ? '1px solid rgba(139, 92, 246, 0.25)'
+                                : '1px solid transparent',
                             background: currentView === item.view
-                                ? 'linear-gradient(135deg, rgba(167, 139, 250, 0.15) 0%, rgba(125, 211, 252, 0.05) 100%)'
+                                ? 'var(--bg-highlight, #222230)'
                                 : 'transparent',
+                            boxShadow: currentView === item.view
+                                ? 'inset 0 1px 0 rgba(255,255,255,0.04), 0 2px 8px rgba(0,0,0,0.15)'
+                                : 'none',
                             color: currentView === item.view ? '#c4b5fd' : '#a1a1aa',
                             cursor: 'pointer',
-                            fontSize: '0.95rem',
+                            fontSize: '0.9375rem',
                             fontWeight: currentView === item.view ? 500 : 400,
-                            transition: 'all 0.2s',
+                            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
                             whiteSpace: 'nowrap',
                             overflow: 'hidden'
                         }}
                         onMouseEnter={(e) => {
                             if (currentView !== item.view) {
-                                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
-                                e.currentTarget.style.color = 'white';
+                                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
+                                e.currentTarget.style.color = '#e4e4e7';
                             }
                         }}
                         onMouseLeave={(e) => {
@@ -142,6 +170,28 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                 ))}
             </nav>
 
+            {/* Active Status Section */}
+            {!isCollapsed && (
+                <SidebarStatus
+                    loadedModels={loadedModels}
+                    isTraining={ftIsTraining}
+                    projectName={ftProjectName}
+                    isCollapsed={isCollapsed}
+                    onStopModel={handleStopModel}
+                />
+            )}
+            {isCollapsed && (loadedModels.length > 0 || ftIsTraining) && (
+                <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                    <SidebarStatus
+                        loadedModels={loadedModels}
+                        isTraining={ftIsTraining}
+                        projectName={ftProjectName}
+                        isCollapsed={isCollapsed}
+                        onStopModel={handleStopModel}
+                    />
+                </div>
+            )}
+
             {/* Downloads Section */}
             {!isCollapsed && (
                 <SidebarDownloads tasks={downloadTasks} isCollapsed={isCollapsed} />
@@ -152,15 +202,52 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                 </div>
             )}
 
-            {/* Settings */}
+            {/* Settings & Theme Toggle */}
             <div
                 className="p-3 border-t border-white/5"
                 style={{
                     padding: isCollapsed ? '12px 8px' : '12px',
                     borderTop: '1px solid rgba(255, 255, 255, 0.05)',
-                    marginTop: 'auto' // Ensure it stays at bottom even if nav is short, though flex-1 on nav handles this. Added for safety.
+                    marginTop: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px'
                 }}
             >
+                {/* Light/Dark Mode Toggle */}
+                <button
+                    onClick={toggleColorMode}
+                    title={isCollapsed ? (colorMode === 'dark' ? 'Light Mode' : 'Dark Mode') : ''}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        justifyContent: isCollapsed ? 'center' : 'flex-start',
+                        padding: isCollapsed ? '12px 0' : '12px 16px',
+                        borderRadius: '8px',
+                        background: 'transparent',
+                        color: '#a1a1aa',
+                        cursor: 'pointer',
+                        border: 'none',
+                        width: '100%',
+                        transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                        e.currentTarget.style.color = 'var(--text-main)';
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'transparent';
+                        e.currentTarget.style.color = '#a1a1aa';
+                    }}
+                >
+                    <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                        {colorMode === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+                    </span>
+                    {!isCollapsed && <span>{colorMode === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
+                </button>
+
+                {/* Settings Button */}
                 <button
                     onClick={() => onNavigate(AppView.Settings)}
                     title={isCollapsed ? 'Settings' : ''}

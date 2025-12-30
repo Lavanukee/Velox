@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -17,6 +18,7 @@ interface DownloadProgress {
 interface LoadedModel {
     path: string;
     name: string;
+    type?: 'llamacpp' | 'transformers';
     serverId?: string;
     serverPort?: number;
     hasMMProj?: boolean;
@@ -162,6 +164,67 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children }) 
         return () => clearTimeout(timeoutId);
     }, [state]);
 
+    // Polling for server health/cleanup
+    useEffect(() => {
+        const interval = setInterval(async () => {
+            // We only check for cleanup if there ARE loaded models
+            if (state.inference.loadedModels.length === 0) return;
+
+            try {
+                // Check primary server (slot 0)
+                const isPrimaryRunning = await invoke<boolean>('check_llama_server_status_command', { slotId: 0 });
+
+                // If primary is down, remove any model marked associated with server-0 (or default) from state
+                if (!isPrimaryRunning) {
+                    setState(prev => {
+                        const stillLoaded = prev.inference.loadedModels.filter(m => m.serverId !== 'server-0');
+                        if (stillLoaded.length !== prev.inference.loadedModels.length) {
+                            return {
+                                ...prev,
+                                inference: {
+                                    ...prev.inference,
+                                    loadedModels: stillLoaded,
+                                    // If we removed the selected model, deselect
+                                    selectedModelPath: prev.inference.selectedModelPath && !stillLoaded.find(m => m.path === prev.inference.selectedModelPath)
+                                        ? null
+                                        : prev.inference.selectedModelPath
+                                }
+                            };
+                        }
+                        return prev;
+                    });
+                }
+
+                // Check secondary server (slot 1)
+                // NOTE: We assume slot 1 corresponds to 'server-1'
+                const isSecondaryRunning = await invoke<boolean>('check_llama_server_status_command', { slotId: 1 });
+                if (!isSecondaryRunning) {
+                    setState(prev => {
+                        const stillLoaded = prev.inference.loadedModels.filter(m => m.serverId !== 'server-1');
+                        if (stillLoaded.length !== prev.inference.loadedModels.length) {
+                            return {
+                                ...prev,
+                                inference: {
+                                    ...prev.inference,
+                                    loadedModels: stillLoaded,
+                                    selectedModelPath: prev.inference.selectedModelPath && !stillLoaded.find(m => m.path === prev.inference.selectedModelPath)
+                                        ? null
+                                        : prev.inference.selectedModelPath
+                                }
+                            };
+                        }
+                        return prev;
+                    });
+                }
+
+            } catch (e) {
+                console.error("Error polling server status:", e);
+            }
+        }, 3000); // Check every 3 seconds
+
+        return () => clearInterval(interval);
+    }, [state.inference.loadedModels]);
+
     // ========================================================================
     // UPDATE FUNCTIONS
     // ========================================================================
@@ -215,15 +278,21 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children }) 
     };
 
     const loadModel = (model: LoadedModel) => {
-        setState(prev => ({
-            ...prev,
-            inference: {
-                ...prev.inference,
-                loadedModels: [...prev.inference.loadedModels, model],
-                // Auto-select if it's the first model
-                selectedModelPath: prev.inference.selectedModelPath || model.path,
-            },
-        }));
+        setState(prev => {
+            // Check for duplicates
+            if (prev.inference.loadedModels.some(m => m.path === model.path && m.serverId === model.serverId)) {
+                return prev;
+            }
+            return {
+                ...prev,
+                inference: {
+                    ...prev.inference,
+                    loadedModels: [...prev.inference.loadedModels, model],
+                    // Auto-select if it's the first model
+                    selectedModelPath: prev.inference.selectedModelPath || model.path,
+                },
+            };
+        });
     };
 
     const unloadModel = (path: string) => {

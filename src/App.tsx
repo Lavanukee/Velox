@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AppProvider, useApp } from "./context/AppContext";
@@ -44,8 +44,12 @@ function AppContent() {
     setupMessage, setSetupMessage,
     setupLoadedBytes, setSetupLoadedBytes,
     setupTotalBytes, setSetupTotalBytes,
-    runGlobalSetup
+    runGlobalSetup,
+    setIsEngineUpdating
   } = useApp();
+
+
+  const isBackgroundUpdateRef = useRef(false);
 
   const updateDownloadTask = useCallback((id: string, update: Partial<DownloadTask>) => {
     setDownloadTasks(prev => {
@@ -71,10 +75,11 @@ function AppContent() {
 
   const addLogMessage = (message: string) => {
     setLogs((prevLogs) => {
-      if (prevLogs.length > 0 && prevLogs[prevLogs.length - 1] === message) {
+      if (prevLogs.length > 0 && prevLogs.length < 1000 && prevLogs[prevLogs.length - 1] === message) {
         return prevLogs;
       }
-      const newLogs = [...prevLogs, message];
+      // Cap logs to prevent memory leak
+      const newLogs = prevLogs.length > 1000 ? [...prevLogs.slice(100), message] : [...prevLogs, message];
       console.log(`APP_LOG (UI): ${message}`);
       return newLogs;
     });
@@ -113,7 +118,7 @@ function AppContent() {
     });
 
     const unlistenSetup = listen<{ step: string, message: string, progress: number, loaded?: number, total?: number }>("setup_progress", (event) => {
-      if (isMounted) {
+      if (isMounted && !isBackgroundUpdateRef.current) {
         setSetupProgressPercent(event.payload.progress);
         if (event.payload.message) setSetupMessage(event.payload.message);
         if (event.payload.loaded !== undefined) setSetupLoadedBytes(event.payload.loaded);
@@ -147,13 +152,41 @@ function AppContent() {
         // 2. Check Llama Binary & Updates
         if (isMounted) setSetupMessage("Checking Inference Engine...");
         const isLlamaReady = await invoke<boolean>('check_llama_binary_command');
+
         if (!isLlamaReady && isMounted) {
-          setSetupMessage("Updating Inference Engine...");
-          setSetupProgressPercent(0);
-          await invoke('download_llama_binary_command');
-          if (isMounted) {
+          // Check if binary actually exists OR if it just needs update
+          const binExists = await invoke<boolean>('check_llama_binary_exists_command');
+
+          if (!binExists) {
+            setSetupMessage("Installing Inference Engine...");
+            setSetupProgressPercent(0);
+            await invoke('download_llama_binary_command');
+            if (isMounted) setSetupProgressPercent(100);
+          } else {
+            // It exists but needs update (version mismatch)
+            // WE DISMISS SPLASH EARLY HERE
+            setSetupMessage("SYSTEM_READY");
             setSetupProgressPercent(100);
-            addNotification("Inference Engine Updated!", "success");
+
+            // Trigger background update
+            setIsEngineUpdating(true);
+            isBackgroundUpdateRef.current = true;
+
+            invoke('download_llama_binary_command').then(() => {
+              if (isMounted) {
+                setIsEngineUpdating(false);
+                isBackgroundUpdateRef.current = false;
+                addNotification("Inference Engine Updated!", "success");
+              }
+            }).catch(e => {
+              if (isMounted) {
+                setIsEngineUpdating(false);
+                isBackgroundUpdateRef.current = false;
+                addNotification(`Engine Update Failed: ${e}`, "error");
+              }
+            });
+
+            return; // Exit checkEnvironment early as we are ready to open
           }
         }
 
@@ -225,59 +258,37 @@ function AppContent() {
           <div
             key={notif.id}
             style={{
-              pointerEvents: 'auto',
-              background: notif.type === 'success'
-                ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.95) 0%, rgba(5, 150, 105, 0.95) 100%)'
-                : notif.type === 'error'
-                  ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.95) 0%, rgba(220, 38, 38, 0.95) 100%)'
-                  : 'linear-gradient(135deg, rgba(59, 130, 246, 0.95) 0%, rgba(37, 99, 235, 0.95) 100%)',
-              padding: '16px 20px',
-              borderRadius: '12px',
+              background: 'rgba(18, 18, 22, 0.95)',
               backdropFilter: 'blur(12px)',
-              border: notif.type === 'success'
-                ? '1px solid rgba(16, 185, 129, 0.3)'
-                : notif.type === 'error'
-                  ? '1px solid rgba(239, 68, 68, 0.3)'
-                  : '1px solid rgba(59, 130, 246, 0.3)',
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2)',
-              minWidth: '320px',
-              maxWidth: '420px',
-              animation: 'slideInRight 0.3s ease-out'
+              border: `1px solid ${notif.type === 'error' ? 'rgba(239, 68, 68, 0.3)' : notif.type === 'success' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
+              borderRadius: '16px',
+              padding: '16px 20px',
+              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              maxWidth: '400px',
+              animation: 'slideInRight 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                background: 'rgba(255, 255, 255, 0.2)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}>
-                {notif.type === 'success' && (
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3,8 6,11 13,4" />
-                  </svg>
-                )}
-                {notif.type === 'error' && (
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="4" y1="4" x2="12" y2="12" />
-                    <line x1="12" y1="4" x2="4" y2="12" />
-                  </svg>
-                )}
-                {notif.type === 'info' && (
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="8" cy="8" r="6" />
-                    <line x1="8" y1="7" x2="8" y2="11" />
-                    <circle cx="8" cy="5" r="0.5" fill="white" />
-                  </svg>
-                )}
-              </div>
-              <div style={{ flex: 1, color: 'white', fontSize: '14px', fontWeight: 500, lineHeight: '1.4' }}>
-                {notif.message}
-              </div>
+            <div style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: notif.type === 'error' ? 'rgba(239, 68, 68, 0.15)' : notif.type === 'success' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+              color: notif.type === 'error' ? '#f87171' : notif.type === 'success' ? '#4ade80' : '#fff'
+            }}>
+              {notif.type === 'error' ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+              )}
+            </div>
+            <div style={{ flex: 1, color: 'white', fontSize: '14px', fontWeight: 500, lineHeight: '1.4' }}>
+              {notif.message}
             </div>
           </div>
         ))}
@@ -341,19 +352,28 @@ function AppContent() {
       )}
 
       {currentView === AppView.Logs && (
-        <div className="bg-panel rounded-xl border border-white/10 p-6 font-mono text-sm h-[calc(100vh-140px)] overflow-y-auto" style={{ background: '#121216', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', padding: '24px', fontFamily: 'monospace', height: 'calc(100vh - 140px)', overflowY: 'auto' }}>
-          {logs.length === 0 ? <div className="text-gray-500">No logs yet...</div> : logs.map((log, index) => (
-            <div key={index} className="mb-1 text-gray-300 border-b border-white/5 pb-1">
-              <span className="text-gray-500 mr-2">[{index}]</span>
-              {log}
-            </div>
-          ))}
-          <button
-            className="mt-4 px-3 py-1 bg-white/5 hover:bg-white/10 rounded text-xs text-gray-400"
-            onClick={() => setLogs([])}
-          >
-            Clear Logs
-          </button>
+        <div className="logs-container">
+          <div className="logs-header">
+            <h3>System Logs</h3>
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={() => setLogs([])}
+            >
+              Clear Logs
+            </button>
+          </div>
+          <div className="logs-content">
+            {logs.length === 0 ? (
+              <div className="text-dim" style={{ padding: '20px', textAlign: 'center' }}>No logs yet...</div>
+            ) : (
+              logs.map((log, index) => (
+                <div key={index} className="log-entry">
+                  <span className="log-index">[{index}]</span>
+                  <span className="log-message">{log}</span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
     </Layout>

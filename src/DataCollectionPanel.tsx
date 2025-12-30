@@ -110,11 +110,12 @@ const DataCollectionPanel: React.FC<DataCollectionPanelProps> = ({ addLogMessage
         transform: 'translate(-50%, -50%)',
         textAlign: 'center',
         zIndex: 10,
-        background: 'rgba(20, 20, 25, 0.95)',
+        background: 'var(--bg-overlay)',
+        backdropFilter: 'blur(12px)',
         padding: '3rem 4rem',
-        borderRadius: '16px',
+        borderRadius: 'var(--radius-lg)',
         border: '2px solid var(--accent-primary)',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+        boxShadow: 'var(--shadow-lg)',
       }}>
         <Construction size={64} style={{
           color: 'var(--accent-primary)',
@@ -134,7 +135,7 @@ const DataCollectionPanel: React.FC<DataCollectionPanelProps> = ({ addLogMessage
         </h2>
         <p style={{
           fontSize: '1.1rem',
-          color: 'var(--text-muted)',
+          color: 'var(--text-secondary)',
           marginBottom: '1rem',
           fontWeight: 600
         }}>

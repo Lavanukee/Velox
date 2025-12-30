@@ -27,7 +27,26 @@ fn get_binaries_dir(app_handle: &AppHandle) -> PathBuf {
 
 // --- COMMANDS ---
 
-const LLAMA_VERSION: &str = "b3263"; // Startup check will force update if this changes
+// LLAMA_VERSION constant removed in favor of dynamic check
+async fn fetch_latest_llama_tag() -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
+        .header("User-Agent", "velox-client")
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API error: {}", resp.status()));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    json["tag_name"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No tag_name in release response".to_string())
+}
 
 #[tauri::command]
 pub async fn check_python_installed_command(app_handle: AppHandle) -> Result<bool, String> {
@@ -74,19 +93,32 @@ pub async fn check_llama_binary_command(app_handle: AppHandle) -> Result<bool, S
     // Check version
     let version_file = bin_dir.join("version.txt");
     if exists {
-        if let Ok(installed_version) = tokio::fs::read_to_string(&version_file).await {
-            let installed = installed_version.trim();
-            if installed != LLAMA_VERSION {
-                debug!("Llama binary version mismatch. Installed: {}, Expected: {}. Triggering update.", installed, LLAMA_VERSION);
-                exists = false;
+        // Try to fetch latest version from GitHub
+        match fetch_latest_llama_tag().await {
+            Ok(latest_tag) => {
+                if let Ok(installed_version) = tokio::fs::read_to_string(&version_file).await {
+                    let installed = installed_version.trim();
+                    if installed != latest_tag {
+                        debug!(
+                            "Update available. Installed: {}, Latest: {}. Triggering update.",
+                            installed, latest_tag
+                        );
+                        exists = false;
+                    } else {
+                        debug!("Llama binary is up to date: {}", latest_tag);
+                    }
+                } else {
+                    debug!("version.txt missing, triggering update to {}", latest_tag);
+                    exists = false;
+                }
             }
-        } else {
-            // No version file implies old install or broken
-            debug!(
-                "Llama binary version.txt missing at {:?}. Triggering update.",
-                version_file
-            );
-            exists = false;
+            Err(e) => {
+                debug!(
+                    "Failed to check for updates: {}. Skipping version check.",
+                    e
+                );
+                // If we can't check online, but binary exists, assume it's usable.
+            }
         }
     }
 
@@ -106,6 +138,18 @@ pub async fn check_llama_binary_command(app_handle: AppHandle) -> Result<bool, S
 
     debug!("Llama binary valid: {}", exists);
     Ok(exists)
+}
+
+#[tauri::command]
+pub async fn check_llama_binary_exists_command(app_handle: AppHandle) -> Result<bool, String> {
+    let bin_dir = get_binaries_dir(&app_handle);
+    let name = if cfg!(windows) {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    };
+    let path = bin_dir.join(name);
+    Ok(path.exists())
 }
 
 #[tauri::command]
@@ -139,9 +183,18 @@ pub async fn download_llama_binary_command(
     debug!("{}", log_msg);
 
     let client = reqwest::Client::new();
+
+    // Fetch dynamic latest version
+    let latest_tag = fetch_latest_llama_tag()
+        .await
+        .map_err(|e| format!("Failed to resolve latest version: {}", e))?;
+    let msg = format!("Resolving latest engine version: {}", latest_tag);
+    debug!("{}", msg);
+    window.emit("log", msg).ok();
+
     let release_url = format!(
         "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{}",
-        LLAMA_VERSION
+        latest_tag
     );
 
     let resp = client
@@ -234,10 +287,35 @@ pub async fn download_llama_binary_command(
             .error_for_status()
             .map_err(|e| format!("Failed to download {} (HTTP Error): {}", label, e))?;
 
-        let content = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read bytes: {}", e))?;
+        let total_size = response.content_length().unwrap_or(0);
+        let mut downloaded: u64 = 0;
+        let mut buffer = Vec::new();
+
+        let mut stream = response.bytes_stream();
+        while let Some(item) = stream.next().await {
+            let chunk = item.map_err(|e| format!("Error while downloading: {}", e))?;
+            buffer.extend_from_slice(&chunk);
+            downloaded += chunk.len() as u64;
+
+            // Emit progress
+            if total_size > 0 {
+                let progress = (downloaded as f64 / total_size as f64 * 100.0) as u8;
+                window
+                    .emit(
+                        "setup_progress",
+                        serde_json::json!({
+                            "step": "download",
+                            "message": format!("Downloading {}...", label),
+                            "progress": progress,
+                            "loaded": downloaded,
+                            "total": total_size
+                        }),
+                    )
+                    .ok();
+            }
+        }
+
+        let content = bytes::Bytes::from(buffer);
 
         let reader = Cursor::new(content);
         let mut archive = zip::ZipArchive::new(reader)
@@ -296,7 +374,7 @@ pub async fn download_llama_binary_command(
     if server_path.exists() {
         // Save version file
         let version_file = bin_dir.join("version.txt");
-        if let Err(e) = tokio::fs::write(&version_file, LLAMA_VERSION).await {
+        if let Err(e) = tokio::fs::write(&version_file, &latest_tag).await {
             window
                 .emit(
                     "log",
@@ -620,11 +698,18 @@ pub async fn start_llama_server_command(
     no_mmap: bool,
     mmproj_path: String,
     lora_path: Option<String>,
-    auto_fit: bool,
+    slot_id: Option<u8>, // 0=Primary, 1=Secondary
 ) -> Result<String, String> {
-    // Kill existing if any
+    let slot = slot_id.unwrap_or(0);
+
+    // Kill existing if any using the correct slot
     {
-        let mut child_guard = python_process_state.llama_server_child.lock().await;
+        let mut child_guard = if slot == 1 {
+            python_process_state.llama_secondary_child.lock().await
+        } else {
+            python_process_state.llama_server_child.lock().await
+        };
+
         if let Some(child) = child_guard.as_mut() {
             let _ = child.kill().await;
             *child_guard = None;
@@ -643,23 +728,99 @@ pub async fn start_llama_server_command(
         return Err("Llama server binary not found. Please download it first.".to_string());
     }
 
-    // Resolve model path to absolute if needed
     let resolved_model_path = {
         let p = PathBuf::from(&model_path);
-        if p.exists() && p.is_absolute() {
+        if p.is_absolute() {
             p
         } else {
             let data_dir = get_data_dir(&app_handle);
-            let check_p = data_dir.join("data").join("models").join(&model_path);
-            if check_p.exists() {
-                check_p
+            if model_path.contains("data/models") || model_path.contains("data\\models") {
+                data_dir.join(&model_path)
             } else {
-                // Fallback: try relative to CWD just in case, or default to constructed path
-                // to let llama-server error out with the full path if missing.
-                check_p
+                data_dir.join("data/models").join(&model_path)
             }
         }
     };
+
+    // Check for chat template files and attempt fallback download if missing
+    let model_parent_dir = if resolved_model_path.is_file() {
+        resolved_model_path
+            .parent()
+            .unwrap_or(&bin_dir)
+            .to_path_buf()
+    } else {
+        resolved_model_path.clone()
+    };
+
+    // Attempt to extract repo_id from folder name (e.g. "author--repo")
+    // If user renamed folder, this might fail, which is fine (we just skip fallback)
+    if let Some(folder_name) = model_parent_dir.file_name() {
+        let folder_str = folder_name.to_string_lossy();
+        if folder_str.contains("--") {
+            // Simple heuristic for HF folders
+            let repo_id = folder_str.replace("--", "/");
+            let files_to_check = vec![
+                "tokenizer_config.json",
+                "special_tokens_map.json",
+                "chat_template.json",
+                "tokenizer.json",
+            ];
+
+            let missing_files: Vec<String> = files_to_check
+                .iter()
+                .filter(|&&f| !model_parent_dir.join(f).exists())
+                .map(|&f| f.to_string())
+                .collect();
+
+            if !missing_files.is_empty() {
+                window.emit("log", format!("Missing chat template files: {:?}. Attempting auto-download from {}...", missing_files, repo_id)).ok();
+
+                let (python_exe, work_dir) = get_python_command(&app_handle).unwrap_or_default();
+                if !python_exe.is_empty() {
+                    let script = get_script_path(&app_handle, "huggingface_manager.py");
+                    // We run this synchronously to ensure they exist before server start
+                    // We use the same 'huggingface_manager.py' as the download command
+                    let mut cmd = create_hidden_command(&python_exe);
+                    cmd.arg(&script)
+                        .arg("download")
+                        .arg("--repo_id")
+                        .arg(&repo_id)
+                        .arg("--output")
+                        .arg(model_parent_dir.to_string_lossy().to_string())
+                        .arg("--files")
+                        .arg(missing_files.join(","));
+
+                    cmd.current_dir(&work_dir);
+
+                    match cmd.output().await {
+                        Ok(o) => {
+                            if o.status.success() {
+                                window
+                                    .emit(
+                                        "log",
+                                        "Auto-download of chat templates successful.".to_string(),
+                                    )
+                                    .ok();
+                            } else {
+                                let err_msg = String::from_utf8_lossy(&o.stderr);
+                                window
+                                    .emit(
+                                        "log",
+                                        format!("Auto-download failed (non-critical): {}", err_msg),
+                                    )
+                                    .ok();
+                            }
+                        }
+                        Err(e) => {
+                            window
+                                .emit("log", format!("Failed to run auto-download command: {}", e))
+                                .ok();
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Construct args
     let mut args = vec![
@@ -674,10 +835,19 @@ pub async fn start_llama_server_command(
         "--ubatch-size".to_string(),
         ubatch_size.to_string(),
         "-ngl".to_string(),
-        gpu_layers.unwrap_or(0).to_string(),
+        // User requested to ignore 'fit' flag and default to GPU.
+        // If gpu_layers is 0 or user passed auto-fit (which passes None/0), we default to offloading ALL layers (using a high number like 300).
+        // This ensures -ngl is always passed.
+        match gpu_layers {
+            Some(n) if n > 0 => n.to_string(),
+            _ => "999".to_string(), // Default to max offload (increased to 999 for safety)
+        },
         "--host".to_string(),
         "0.0.0.0".to_string(),
     ];
+
+    // Log the constructed arguments for debugging
+    log::info!("Starting Llama Server with args: {:?}", args);
 
     // Auto-detect mmproj if not provided
     let mut effective_mmproj_path = mmproj_path.clone();
@@ -709,6 +879,7 @@ pub async fn start_llama_server_command(
     }
     if flash_attn {
         args.push("--flash-attn".to_string());
+        args.push("on".to_string());
     }
     if no_mmap {
         args.push("--no-mmap".to_string());
@@ -718,29 +889,14 @@ pub async fn start_llama_server_command(
         args.push(t.to_string());
     }
 
-    // Default stop sequences to prevent model hallucinations
-    let stop_sequences = vec![
-        "<|im_start|>",
-        "<|im_end|>",
-        "\nuser:",
-        "\nassistant:",
-        "###",
-        "</s>",
-    ];
-    for stop_seq in stop_sequences {
-        args.push("--stop".to_string());
-        args.push(stop_seq.to_string());
-    }
+    // Stop sequences are handled at the request level in the chat commands
+    // to ensure compatibility with different llama-server versions that may not support --stop or --stop-sequence CLI flags.
 
-    // Auto-fit memory management (llama.cpp --fit feature)
-    // When enabled, llama.cpp automatically adjusts context size and GPU layers to maximize VRAM usage
-    // Note: This is a boolean flag in modern llama.cpp, not --fit on
-    // Actually, checking b3263 docs, --fit might not exist. Let's remove it to prevent errors.
-    // if auto_fit {
-    //     args.push("--fit".to_string());
-    // }
-
-    let mut child_guard = python_process_state.llama_server_child.lock().await;
+    let mut child_guard = if slot == 1 {
+        python_process_state.llama_secondary_child.lock().await
+    } else {
+        python_process_state.llama_server_child.lock().await
+    };
 
     // Windows usually needs hidden command, but for server we want to capture stdout/stderr manually.
     let mut cmd = if cfg!(windows) {
@@ -766,8 +922,13 @@ pub async fn start_llama_server_command(
         let mut line = String::new();
         while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
             if !line.trim().is_empty() {
+                let prefix = if slot == 1 {
+                    "LLAMA_SERVER_SEC"
+                } else {
+                    "LLAMA_SERVER"
+                };
                 win_c
-                    .emit("log", format!("LLAMA_SERVER: {}", line.trim()))
+                    .emit("log", format!("{}: {}", prefix, line.trim()))
                     .unwrap_or(());
             }
             line.clear();
@@ -796,26 +957,42 @@ pub async fn start_llama_server_command(
 #[tauri::command]
 pub async fn stop_llama_server_command(
     python_process_state: State<'_, Arc<PythonProcessState>>,
+    slot_id: Option<u8>,
 ) -> Result<String, String> {
-    let mut child_guard = python_process_state.llama_server_child.lock().await;
+    let slot = slot_id.unwrap_or(0);
+    let mut child_guard = if slot == 1 {
+        python_process_state.llama_secondary_child.lock().await
+    } else {
+        python_process_state.llama_server_child.lock().await
+    };
+
     if let Some(child) = child_guard.as_mut() {
         match child.kill().await {
             Ok(_) => {
                 *child_guard = None;
-                Ok("Llama server stopped.".to_string())
+                Ok(format!("Llama server (slot {}) stopped.", slot))
             }
-            Err(e) => Err(format!("Failed to stop Llama server: {}", e)),
+            Err(e) => Err(format!(
+                "Failed to stop Llama server (slot {}): {}",
+                slot, e
+            )),
         }
     } else {
-        Err("Llama server is not running.".into())
+        Err(format!("Llama server (slot {}) is not running.", slot).into())
     }
 }
 
 #[tauri::command]
 pub async fn check_llama_server_status_command(
     python_process_state: State<'_, Arc<PythonProcessState>>,
+    slot_id: Option<u8>,
 ) -> Result<bool, String> {
-    let child_guard = python_process_state.llama_server_child.lock().await;
+    let slot = slot_id.unwrap_or(0);
+    let child_guard = if slot == 1 {
+        python_process_state.llama_secondary_child.lock().await
+    } else {
+        python_process_state.llama_server_child.lock().await
+    };
     Ok(child_guard.is_some())
 }
 
@@ -926,6 +1103,9 @@ pub struct ResourceInfo {
     pub is_mmproj: bool,
     pub is_processed: Option<bool>,
     pub dataset_format: Option<String>,
+    pub format_error: Option<String>, // Error if format detection failed
+    pub count: Option<u64>,
+    pub modalities: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -960,6 +1140,9 @@ pub async fn list_all_resources_command(
                         is_mmproj: false,
                         is_processed: None,
                         dataset_format: None,
+                        format_error: None,
+                        count: None,
+                        modalities: None,
                     });
                 } else {
                     if let Ok(mut sub) = fs::read_dir(&path_obj).await {
@@ -983,6 +1166,9 @@ pub async fn list_all_resources_command(
                                     is_mmproj: false, // Since we skip them, this flag usage might change, but for now we won't show them at all.
                                     is_processed: None,
                                     dataset_format: None,
+                                    format_error: None,
+                                    count: None,
+                                    modalities: None,
                                 });
                             }
                         }
@@ -1017,6 +1203,47 @@ pub async fn list_all_resources_command(
                         }
                     }
                 }
+                // Check for format error and metadata
+                let mut format_error = None;
+                let mut dataset_count: Option<u64> = None;
+                let mut dataset_modalities: Option<Vec<String>> = None;
+
+                let format_info_path = path.join("processed_data").join("format_info.json");
+                if format_info_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&format_info_path) {
+                        if let Ok(info) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if info.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                                format_error = info
+                                    .get("error")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                            }
+                            // Also get detected format for display
+                            if let Some(detected) =
+                                info.get("detected_format").and_then(|v| v.as_str())
+                            {
+                                if fmt.is_none() {
+                                    fmt = Some(detected.to_string());
+                                }
+                            }
+                            // Get count
+                            if let Some(c) = info.get("num_examples").and_then(|v| v.as_u64()) {
+                                dataset_count = Some(c);
+                            }
+                            // Get modalities
+                            if let Some(mods) = info.get("modalities").and_then(|v| v.as_array()) {
+                                let mod_strings: Vec<String> = mods
+                                    .iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect();
+                                if !mod_strings.is_empty() {
+                                    dataset_modalities = Some(mod_strings);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 resources.push(ResourceInfo {
                     name,
                     size: get_dir_size(&path).await.unwrap_or("Unknown".into()),
@@ -1026,6 +1253,9 @@ pub async fn list_all_resources_command(
                     is_mmproj: false,
                     is_processed: Some(is_processed),
                     dataset_format: fmt,
+                    format_error,
+                    count: dataset_count,
+                    modalities: dataset_modalities,
                 });
             }
         }
@@ -1048,6 +1278,9 @@ pub async fn list_all_resources_command(
                     is_mmproj: false,
                     is_processed: None,
                     dataset_format: None,
+                    format_error: None,
+                    count: None,
+                    modalities: None,
                 });
             }
         }
@@ -1058,7 +1291,7 @@ pub async fn list_all_resources_command(
 
 #[tauri::command]
 pub async fn send_chat_message_command(
-    window: Window,
+    _window: Window,
     llama_chat_context: State<'_, Arc<LlamaChatContext>>,
     host: String,
     port: u16,
@@ -1075,7 +1308,6 @@ pub async fn send_chat_message_command(
     );
     let mut chat_history = llama_chat_context.chat_history.lock().await;
 
-    // Use serde_json::json! macro for constructing messages
     let user_message = serde_json::json!({
         "role": "user",
         "content": message
@@ -1083,7 +1315,6 @@ pub async fn send_chat_message_command(
     chat_history.push(user_message);
 
     let mut messages_for_server = Vec::new();
-
     if chat_history.len() == 1
         || chat_history.last().map_or(false, |m| {
             m.get("role")
@@ -1128,13 +1359,6 @@ pub async fn send_chat_message_command(
         stream: false,
     };
 
-    window
-        .emit(
-            "log",
-            format!("Sending message to Llama server: '{}'", message),
-        )
-        .ok();
-
     let res = client
         .post(&url)
         .json(&request_body)
@@ -1160,51 +1384,6 @@ pub async fn send_chat_message_command(
     }
 }
 
-// ... Additional simple commands ...
-
-#[tauri::command]
-pub async fn clear_chat_history_command(
-    llama_chat_context: State<'_, Arc<LlamaChatContext>>,
-) -> Result<(), String> {
-    let mut chat_history = llama_chat_context.chat_history.lock().await;
-    chat_history.clear();
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_hf_token_command() -> Result<String, String> {
-    let token_path = PathBuf::from(HF_TOKEN_FILE);
-    if token_path.exists() {
-        let token = fs::read_to_string(&token_path)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(token.trim().to_string())
-    } else {
-        Err("No token found".to_string())
-    }
-}
-
-#[tauri::command]
-pub async fn save_hf_token_command(token: String) -> Result<String, String> {
-    fs::write(HF_TOKEN_FILE, token.trim())
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok("Token saved".to_string())
-}
-
-#[derive(Serialize, Clone)]
-struct StreamChunk {
-    content: String,
-}
-
-#[derive(Serialize, Clone)]
-struct StreamMetrics {
-    prompt_eval_time_ms: f64,
-    eval_time_ms: f64,
-    tokens_per_second: f64,
-    total_tokens: u64,
-}
-
 #[tauri::command]
 pub async fn send_chat_message_streaming_command(
     window: Window,
@@ -1217,12 +1396,36 @@ pub async fn send_chat_message_streaming_command(
     top_p: f64,
     top_k: u64,
     _ctx_size: u64,
+    label: Option<String>,
+    full_history: Option<Vec<serde_json::Value>>,
 ) -> Result<String, String> {
-    debug!("Streaming chat message: {:?}", message);
+    debug!("Streaming chat message (label: {:?}): {:?}", label, message);
 
     let mut chat_history = llama_chat_context.chat_history.lock().await;
 
-    // Use serde_json::json! macro for constructing messages
+    // If full history is provided, replace existing history (stateless mode for frontend)
+    if let Some(history) = full_history {
+        *chat_history = history;
+        // User message is assumed to be in the history or we don't add it separately?
+        // Wait, the frontend might send HISTORY + NEW MESSAGE separately?
+        // Logic: If full_history is passed, we assume it INCLUDES the latest message, OR we append `message` to it?
+        // Let's assume full_history is everything UP TO the new message, and we append `message`.
+        // OR filtering: Frontend sends EVERYTHING.
+
+        // Let's check how I plan to use it.
+        // I want Frontend to send "current state of chat".
+        // So `full_history` should be "everything including latest".
+        // But `message` param exists.
+
+        // Revised Logic:
+        // If `full_history` is present, use it as the base.
+        // Push `message` to it?
+        // No, `message` is the "prompt" for completion.
+        // It's cleaner if `full_history` replaces the *past*, and we push `message` as user message.
+        // This allows `message` to be the trigger.
+    }
+
+    // Construct the user message
     let user_message = serde_json::json!({
         "role": "user",
         "content": message
@@ -1283,123 +1486,173 @@ pub async fn send_chat_message_streaming_command(
         }),
     };
 
-    window
-        .emit("log", format!("Streaming chat message..."))
-        .ok();
+    let event_chunk = label
+        .as_ref()
+        .map(|l| format!("chat-stream-chunk-{}", l))
+        .unwrap_or_else(|| "chat-stream-chunk".to_string());
+    let event_done = label
+        .as_ref()
+        .map(|l| format!("chat-stream-done-{}", l))
+        .unwrap_or_else(|| "chat-stream-done".to_string());
 
-    // DEBUG: Log the request body to see what we are sending for Vision
-    let debug_body_str = serde_json::to_string_pretty(&request_body).unwrap_or_default();
-    debug!("Llama Request Body: {}", debug_body_str);
-    // Be careful not to emit huge base64 strings to frontend logs affecting perf, but for debugging we need to see structure
-    if debug_body_str.len() > 2000 {
-        window
-            .emit(
-                "log",
-                format!("Request body (truncated): {}", &debug_body_str[..2000]),
-            )
-            .ok();
-    } else {
-        window
-            .emit("log", format!("Request body: {}", debug_body_str))
-            .ok();
-    }
+    window
+        .emit(
+            "log",
+            format!(
+                "Sending message to Llama server ({}): '{}'",
+                event_chunk, message
+            ),
+        )
+        .ok();
 
     let start_time = std::time::Instant::now();
     let mut first_token_time: Option<std::time::Instant> = None;
     let mut token_count = 0;
 
-    let response = client
+    let res = client
         .post(&url)
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Failed to send streaming request: {}", e))?;
+        .map_err(|e| e.to_string())?;
 
-    if !response.status().is_success() {
-        return Err(format!("Server error: {}", response.status()));
-    }
-
-    let mut stream = response.bytes_stream();
-    let mut buffer = String::new();
+    let mut stream = res.bytes_stream();
+    let mut full_response = String::new();
 
     while let Some(item) = stream.next().await {
         let chunk = item.map_err(|e| e.to_string())?;
         let s = String::from_utf8_lossy(&chunk);
-        buffer.push_str(&s);
 
-        while let Some(pos) = buffer.find('\n') {
-            let line = buffer[..pos].trim().to_string();
-            buffer = buffer[pos + 1..].to_string();
+        // DEBUG: Log raw chunk from server
+        debug!("Raw stream chunk: {}", s);
 
+        for line in s.lines() {
             if line.starts_with("data: ") {
-                let data_str = &line[6..];
-                if data_str == "[DONE]" {
+                let data = line.trim_start_matches("data: ").trim();
+                if data == "[DONE]" {
                     break;
                 }
 
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(data_str) {
-                    if let Some(choices) = json.get("choices") {
-                        if let Some(choice) = choices.get(0) {
-                            if let Some(choice_obj) = choice.as_object() {
-                                if let Some(delta) = choice_obj.get("delta") {
-                                    if let Some(content) = delta.get("content") {
-                                        if let Some(content_str) = content.as_str() {
-                                            if !content_str.is_empty() {
-                                                if first_token_time.is_none() {
-                                                    first_token_time =
-                                                        Some(std::time::Instant::now());
-                                                }
-                                                token_count += 1;
-                                                window
-                                                    .emit(
-                                                        "chat-stream-chunk",
-                                                        StreamChunk {
-                                                            content: content_str.to_string(),
-                                                        },
-                                                    )
-                                                    .ok();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                // DEBUG: Log parsed data
+                debug!("Parsed data: {}", data);
+
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                    // DEBUG: Log the full parsed JSON
+                    debug!("Parsed JSON: {:?}", val);
+
+                    if let Some(content) = val["choices"][0]["delta"]["content"].as_str() {
+                        if first_token_time.is_none() {
+                            first_token_time = Some(std::time::Instant::now());
                         }
+                        token_count += 1;
+                        full_response.push_str(content);
+                        window
+                            .emit(
+                                &event_chunk,
+                                StreamChunk {
+                                    content: content.to_string(),
+                                },
+                            )
+                            .ok();
+                    } else {
+                        // DEBUG: Log when content is not found
+                        debug!(
+                            "No content found in delta. choices[0]: {:?}",
+                            val["choices"][0]
+                        );
+                    }
+
+                    // Check for usage/metrics at the end
+                    if let Some(usage) = val.get("usage") {
+                        let total_tokens =
+                            usage["total_tokens"].as_u64().unwrap_or(token_count as u64);
+
+                        let prompt_eval_time_ms = first_token_time
+                            .map(|t| t.duration_since(start_time).as_secs_f64() * 1000.0)
+                            .unwrap_or(0.0);
+                        let eval_time_ms = if let Some(first) = first_token_time {
+                            std::time::Instant::now()
+                                .duration_since(first)
+                                .as_secs_f64()
+                                * 1000.0
+                        } else {
+                            0.0
+                        };
+                        let tps = if eval_time_ms > 0.0 {
+                            (token_count as f64) / (eval_time_ms / 1000.0)
+                        } else {
+                            0.0
+                        };
+
+                        window
+                            .emit(
+                                &event_done,
+                                StreamMetrics {
+                                    prompt_eval_time_ms,
+                                    eval_time_ms,
+                                    tokens_per_second: tps,
+                                    total_tokens,
+                                },
+                            )
+                            .ok();
                     }
                 }
             }
         }
     }
 
-    let prompt_eval_time_ms = first_token_time
-        .map(|t| t.duration_since(start_time).as_secs_f64() * 1000.0)
-        .unwrap_or(0.0);
-    let eval_time_ms = if let Some(first) = first_token_time {
-        std::time::Instant::now()
-            .duration_since(first)
-            .as_secs_f64()
-            * 1000.0
-    } else {
-        0.0
-    };
-    let tps = if eval_time_ms > 0.0 {
-        (token_count as f64) / (eval_time_ms / 1000.0)
-    } else {
-        0.0
-    };
-
-    window
-        .emit(
-            "chat-stream-done",
-            StreamMetrics {
-                prompt_eval_time_ms,
-                eval_time_ms,
-                tokens_per_second: tps,
-                total_tokens: token_count,
-            },
-        )
-        .ok();
+    let bot_message = serde_json::json!({
+        "role": "assistant",
+        "content": full_response
+    });
+    chat_history.push(bot_message);
 
     Ok("Stream complete".to_string())
+}
+
+// ... Additional simple commands ...
+
+#[tauri::command]
+pub async fn clear_chat_history_command(
+    llama_chat_context: State<'_, Arc<LlamaChatContext>>,
+) -> Result<(), String> {
+    let mut chat_history = llama_chat_context.chat_history.lock().await;
+    chat_history.clear();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_hf_token_command() -> Result<String, String> {
+    let token_path = PathBuf::from(HF_TOKEN_FILE);
+    if token_path.exists() {
+        let token = fs::read_to_string(&token_path)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(token.trim().to_string())
+    } else {
+        Err("No token found".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn save_hf_token_command(token: String) -> Result<String, String> {
+    fs::write(HF_TOKEN_FILE, token.trim())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok("Token saved".to_string())
+}
+
+#[derive(Serialize, Clone)]
+struct StreamChunk {
+    content: String,
+}
+
+#[derive(Serialize, Clone)]
+struct StreamMetrics {
+    prompt_eval_time_ms: f64,
+    eval_time_ms: f64,
+    tokens_per_second: f64,
+    total_tokens: u64,
 }
 
 #[tauri::command]
@@ -1815,8 +2068,10 @@ pub async fn download_hf_dataset_command(
 pub async fn convert_dataset_command(
     window: Window,
     app_handle: AppHandle,
+    models_state: State<'_, Arc<ModelsState>>,
     source_path: String,
     destination_path: String,
+    task_id: Option<String>,
 ) -> Result<String, String> {
     let (python_exe, work_dir) = get_python_command(&app_handle)?;
     let script = get_script_path(&app_handle, "huggingface_manager.py");
@@ -1848,6 +2103,18 @@ pub async fn convert_dataset_command(
         .stderr(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+
+    // Track active task for cancellation/progress
+    if let Some(tid) = &task_id {
+        if let Some(pid) = child.id() {
+            models_state
+                .active_downloads
+                .lock()
+                .await
+                .insert(tid.clone(), pid);
+        }
+    }
+
     let stdout = child.stdout.take().ok_or("No stdout")?;
     let stderr = child.stderr.take().ok_or("No stderr")?;
 
@@ -1863,22 +2130,215 @@ pub async fn convert_dataset_command(
         }
     });
 
+    let win_c = window.clone();
+    let task_id_c = task_id.clone();
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            let trimmed = line.trim();
+            if trimmed.starts_with("PROGRESS:") {
+                // Reuse download_progress event logic
+                if let Some(value) = trimmed.strip_prefix("PROGRESS:") {
+                    if let Ok(percentage) = value.parse::<u8>() {
+                        if let Some(tid) = &task_id_c {
+                            win_c
+                                .emit(
+                                    "download_progress",
+                                    serde_json::json!({ "id": tid, "progress": percentage }),
+                                )
+                                .ok();
+                        }
+                    }
+                }
+            } else if trimmed.starts_with("Map") && trimmed.contains('%') {
+                // Parse "Map ... 52% ..." for tqdm progress
+                if let Some(idx) = trimmed.find('%') {
+                    let prefix = &trimmed[..idx];
+                    let mut start_idx = idx;
+                    for (i, c) in prefix.char_indices().rev() {
+                        if !c.is_ascii_digit() {
+                            break;
+                        }
+                        start_idx = i;
+                    }
+                    if start_idx < idx {
+                        if let Ok(percentage) = prefix[start_idx..idx].parse::<u8>() {
+                            if let Some(tid) = &task_id_c {
+                                win_c
+                                    .emit(
+                                        "download_progress",
+                                        serde_json::json!({ "id": tid, "progress": percentage }),
+                                    )
+                                    .ok();
+                            }
+                        }
+                    }
+                }
+                // Log the map line as well for detail
+                win_c.emit("log", format!("CONVERT: {}", trimmed)).ok();
+            } else if !trimmed.is_empty() {
+                win_c.emit("log", format!("CONVERT: {}", trimmed)).ok();
+            }
+            line.clear();
+        }
+    });
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+
+    if let Some(tid) = &task_id {
+        models_state.active_downloads.lock().await.remove(tid);
+        let status_str = if status.success() {
+            "completed"
+        } else {
+            "error"
+        };
+        window
+            .emit(
+                "download_status",
+                serde_json::json!({ "id": tid, "status": status_str }),
+            )
+            .ok();
+    }
+
+    if status.success() {
+        Ok("Dataset converted successfully".to_string())
+    } else {
+        Err("Dataset conversion failed".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn fix_dataset_command(
+    window: Window,
+    app_handle: AppHandle,
+    source_path: String,
+) -> Result<String, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "fix_dataset.py");
+    let data_dir = get_data_dir(&app_handle);
+
+    let source_abs = if PathBuf::from(&source_path).is_absolute() {
+        source_path
+    } else {
+        data_dir.join(&source_path).to_string_lossy().to_string()
+    };
+
+    // Output is usually fixing in place or creating a parallel file, the script handles default
+    let mut cmd = create_hidden_command(&python_exe);
+    cmd.arg(&script)
+        .arg("--dataset_dir")
+        .arg(&source_abs)
+        .current_dir(&work_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or("No stdout")?;
+    let stderr = child.stderr.take().ok_or("No stderr")?;
+
+    let win_c = window.clone();
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            if !line.trim().is_empty() {
+                win_c.emit("log", format!("FIX_DS: {}", line.trim())).ok();
+            }
+            line.clear();
+        }
+    });
+
     let win_c2 = window.clone();
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
         let mut line = String::new();
         while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
             if !line.trim().is_empty() {
-                win_c2.emit("log", format!("CONVERT: {}", line.trim())).ok();
+                win_c2
+                    .emit("log", format!("FIX_DS ERR: {}", line.trim()))
+                    .ok();
             }
             line.clear();
         }
     });
 
     if child.wait().await.map_err(|e| e.to_string())?.success() {
-        Ok("Dataset converted successfully".to_string())
+        Ok("Dataset repair completed".to_string())
     } else {
-        Err("Dataset conversion failed".to_string())
+        Err("Dataset repair failed".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn process_vlm_dataset_command(
+    window: Window,
+    app_handle: AppHandle,
+    dataset_dir: String,
+    model_name: String,
+) -> Result<String, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "process_data.py");
+    let data_dir = get_data_dir(&app_handle);
+
+    let source_abs = if PathBuf::from(&dataset_dir).is_absolute() {
+        dataset_dir.clone()
+    } else {
+        data_dir.join(&dataset_dir).to_string_lossy().to_string()
+    };
+
+    // Output dir is usually specific for VLM processing, e.g. source_dir/processed_vlm
+    let output_dir = PathBuf::from(&source_abs)
+        .join("processed_data")
+        .to_string_lossy()
+        .to_string();
+
+    let mut cmd = create_hidden_command(&python_exe);
+    cmd.arg(&script)
+        .arg("--dataset_dir")
+        .arg(&source_abs)
+        .arg("--output_dir")
+        .arg(&output_dir)
+        .arg("--model_name")
+        .arg(&model_name)
+        .current_dir(&work_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or("No stdout")?;
+    let stderr = child.stderr.take().ok_or("No stderr")?;
+
+    let win_c = window.clone();
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            if !line.trim().is_empty() {
+                win_c.emit("log", format!("VLM_PROC: {}", line.trim())).ok();
+            }
+            line.clear();
+        }
+    });
+
+    let win_c2 = window.clone();
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            if !line.trim().is_empty() {
+                win_c2
+                    .emit("log", format!("VLM_PROC ERR: {}", line.trim()))
+                    .ok();
+            }
+            line.clear();
+        }
+    });
+
+    if child.wait().await.map_err(|e| e.to_string())?.success() {
+        Ok("VLM Dataset processing completed".to_string())
+    } else {
+        Err("VLM Dataset processing failed".to_string())
     }
 }
 
@@ -2229,25 +2689,46 @@ pub async fn start_training_command(
     python_process_state: State<'_, Arc<PythonProcessState>>,
     project_name: String,
     model_path: String,
-    dataset_path: String,
+    dataset_paths: Vec<String>, // Changed from dataset_path: String to support multiple
     num_epochs: u32,
     batch_size: u32,
     learning_rate: f64,
     lora_r: u32,
     lora_alpha: u32,
     max_seq_length: u32,
+    training_method: Option<String>, // sft, dpo, orpo
+    adapter_type: Option<String>,    // lora, dora, full
+    gradient_accumulation_steps: Option<u32>,
+    warmup_ratio: Option<f64>,
+    weight_decay: Option<f64>,
+    optimizer: Option<String>,
+    lr_scheduler_type: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let (python_exe, work_dir) = get_python_command(&app_handle)?;
     let data_dir = get_data_dir(&app_handle);
-    let dataset_abs = if PathBuf::from(&dataset_path).is_absolute() {
-        dataset_path
-    } else {
-        data_dir
-            .join("data/datasets")
-            .join(&dataset_path)
-            .to_string_lossy()
-            .to_string()
-    };
+
+    // Resolve multiple dataset paths
+    let datasets_abs: Vec<String> = dataset_paths
+        .iter()
+        .map(|dataset_path| {
+            if PathBuf::from(&dataset_path).is_absolute() {
+                dataset_path.clone()
+            } else if dataset_path.contains("data/datasets")
+                || dataset_path.contains("data\\datasets")
+            {
+                data_dir.join(&dataset_path).to_string_lossy().to_string()
+            } else {
+                data_dir
+                    .join("data/datasets")
+                    .join(&dataset_path)
+                    .to_string_lossy()
+                    .to_string()
+            }
+        })
+        .collect();
+
+    // Join paths with comma for --datasets argument
+    let datasets_arg = datasets_abs.join(",");
 
     // Tensorboard logic (Simplified for length: assuming already handled by setup or similar if we want robustness,
     // but honestly we should probably include the minimal TB logic if it's critical).
@@ -2329,8 +2810,8 @@ pub async fn start_training_command(
     cmd.arg(&script)
         .arg("--model")
         .arg(&model_path)
-        .arg("--dataset")
-        .arg(&dataset_abs)
+        .arg("--datasets")
+        .arg(&datasets_arg)
         .arg("--epochs")
         .arg(num_epochs.to_string())
         .arg("--batch_size")
@@ -2344,8 +2825,33 @@ pub async fn start_training_command(
         .arg("--max_seq_length")
         .arg(max_seq_length.to_string())
         .arg("--output_dir")
-        .arg(&output_dir_abs)
-        .current_dir(&work_dir)
+        .arg(&output_dir_abs);
+
+    // Add optional training method and adapter type
+    if let Some(tm) = &training_method {
+        cmd.arg("--training_method").arg(tm);
+    }
+    if let Some(at) = &adapter_type {
+        cmd.arg("--adapter_type").arg(at);
+    }
+    if let Some(gas) = gradient_accumulation_steps {
+        cmd.arg("--gradient_accumulation_steps")
+            .arg(gas.to_string());
+    }
+    if let Some(wr) = warmup_ratio {
+        cmd.arg("--warmup_ratio").arg(wr.to_string());
+    }
+    if let Some(wd) = weight_decay {
+        cmd.arg("--weight_decay").arg(wd.to_string());
+    }
+    if let Some(opt) = &optimizer {
+        cmd.arg("--optimizer").arg(opt);
+    }
+    if let Some(lrs) = &lr_scheduler_type {
+        cmd.arg("--lr_scheduler_type").arg(lrs);
+    }
+
+    cmd.current_dir(&work_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -2908,7 +3414,7 @@ pub async fn setup_python_env_command(
             "accelerate",
             "bitsandbytes",
             "tensorboard",
-            "huggingface_hub",
+            "huggingface_hub[hf_xet]",
             "requests",
             "uvicorn",
             "fastapi",

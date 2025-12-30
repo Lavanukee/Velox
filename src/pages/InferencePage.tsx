@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useApp } from '../context/AppContext';
+import { useAppState } from '../context/AppStateContext';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
@@ -9,10 +10,11 @@ import { CanvasPanel } from '../components/CanvasPanel';
 import ToolCreatorModal from '../components/ToolCreatorModal';
 import { Select } from '../components/Select';
 import {
-    Send, Settings2, Bot, User, Trash2, Edit2, RotateCcw,
+    Settings2, Trash2, Edit2, RotateCcw,
     ChevronDown, Cpu, Zap, HardDrive, Layers, Terminal,
     Loader2, CheckCircle2, XCircle, Power, Paperclip, X,
-    Settings, Wrench, BarChart2, Clock, PenTool, Search, Code, Brain, Activity
+    Settings, Wrench, BarChart2, Clock, PenTool, Search, Code, Brain, Activity,
+    ArrowUp, PlusCircle, Play
 } from 'lucide-react';
 import type { Option } from '../components/Select';
 
@@ -204,6 +206,157 @@ const parseMessageContentBlocks = (text: string): ContentBlock[] => {
     return blocks;
 };
 
+interface MessageItemProps {
+    msg: any;
+    idx: number;
+    isSecondary: boolean;
+    editingIndex: number | null;
+    editText: string;
+    setEditText: (t: string) => void;
+    handleEditSave: (i: number) => void;
+    handleEditStart: (i: number) => void;
+    handleDeleteMessage: (i: number) => void;
+    setEditingIndex: (i: number | null) => void;
+    streamMetrics: any;
+    infShowMetrics: boolean;
+    isLast: boolean;
+}
+
+const MessageItem: React.FC<MessageItemProps> = ({
+    msg, idx, editingIndex, editText, setEditText,
+    handleEditSave, handleEditStart, handleDeleteMessage, setEditingIndex,
+    streamMetrics, infShowMetrics, isLast
+}) => {
+    const isUser = msg.sender === 'user';
+    const [hovering, setHovering] = useState(false);
+
+    return (
+        <div
+            style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: isUser ? 'flex-end' : 'flex-start', // Model left-aligned, user right-aligned
+                width: '100%',
+                marginBottom: '16px'
+            }}
+            onMouseEnter={() => setHovering(true)}
+            onMouseLeave={() => setHovering(false)}
+        >
+            {editingIndex === idx ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: isUser ? '70%' : '90%' }}>
+                    <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '10px', padding: '12px', color: 'white', minHeight: '80px', resize: 'vertical', width: '100%' }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <Button size="sm" onClick={() => handleEditSave(idx)}>Save</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingIndex(null)}>Cancel</Button>
+                    </div>
+                </div>
+            ) : (
+                <>
+                    {/* Message Content */}
+                    <div style={{
+                        maxWidth: isUser ? '70%' : '90%',
+                        padding: isUser ? '14px 18px' : '16px 0',
+                        borderRadius: isUser ? '16px' : '0',
+                        // User: gradient border effect using background trick
+                        background: isUser
+                            ? 'linear-gradient(135deg, rgba(10,10,14,1) 0%, rgba(20,18,28,1) 100%)'
+                            : 'transparent',
+                        border: isUser
+                            ? '1px solid transparent'
+                            : 'none',
+                        backgroundImage: isUser
+                            ? 'linear-gradient(135deg, rgba(10,10,14,1), rgba(20,18,28,1)), linear-gradient(135deg, rgba(40,40,50,0.6) 0%, rgba(139,92,246,0.3) 100%)'
+                            : 'none',
+                        backgroundOrigin: 'border-box',
+                        backgroundClip: isUser ? 'padding-box, border-box' : 'unset',
+                        color: '#e5e7eb',
+                        textAlign: isUser ? 'right' : 'left',
+                    }}>
+                        {msg.sender === 'bot' ? (() => {
+                            const blocks = parseMessageContentBlocks(msg.text);
+                            return (
+                                <>
+                                    {blocks.map((block, bIdx) => {
+                                        if (block.type === 'thinking') return <ThinkingBlock key={bIdx} content={block.content} />;
+                                        if (block.type === 'tool_call') return <ToolCallBlock key={bIdx} content={block.content} />;
+                                        if (block.type === 'tool_result') return <ToolResultBlock key={bIdx} content={block.content} />;
+                                        return <MarkdownRenderer key={bIdx} content={block.content} />;
+                                    })}
+                                </>
+                            );
+                        })() : (
+                            <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6, margin: 0 }}>{msg.text}</p>
+                        )}
+                        {msg.sender === 'bot' && !msg.isStreaming && streamMetrics && isLast && infShowMetrics && (
+                            <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Zap size={12} /> {streamMetrics.tokens_per_second.toFixed(1)} t/s</span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><BarChart2 size={12} /> {streamMetrics.total_tokens} tokens</span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={12} /> Prompt: {streamMetrics.prompt_eval_time_ms.toFixed(0)}ms</span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={12} /> Eval: {streamMetrics.eval_time_ms.toFixed(0)}ms</span>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Edit/Delete Buttons - Icon only, circular, hover effect */}
+                    <div style={{
+                        display: 'flex',
+                        gap: '8px',
+                        marginTop: '8px',
+                        justifyContent: isUser ? 'flex-end' : 'center',
+                        opacity: hovering ? 1 : 0,
+                        transition: 'opacity 0.2s'
+                    }}>
+                        <button
+                            onClick={() => handleEditStart(idx)}
+                            style={{
+                                width: '28px',
+                                height: '28px',
+                                padding: 0,
+                                background: 'rgba(255,255,255,0.05)',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                borderRadius: '50%',
+                                color: 'rgba(255,255,255,0.5)',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                transition: 'all 0.2s'
+                            }}
+                            className="icon-btn"
+                        >
+                            <Edit2 size={12} />
+                        </button>
+                        <button
+                            onClick={() => handleDeleteMessage(idx)}
+                            style={{
+                                width: '28px',
+                                height: '28px',
+                                padding: 0,
+                                background: 'rgba(239,68,68,0.1)',
+                                border: '1px solid rgba(239,68,68,0.2)',
+                                borderRadius: '50%',
+                                color: 'rgba(239,68,68,0.7)',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                transition: 'all 0.2s'
+                            }}
+                            className="icon-btn-danger"
+                        >
+                            <Trash2 size={12} />
+                        </button>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
+
 interface InferencePageProps {
     modelConfig: any;
     addLogMessage: (message: string) => void;
@@ -221,7 +374,13 @@ interface ProjectLoraInfo {
     checkpoints: CheckpointInfo[];
 }
 
+// Helper for IDs
+const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
+
 const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessage }) => {
+    const { loadModel, state } = useAppState();
+    const loadedModels = state.inference.loadedModels;
+
     const {
         userMode,
         chatMessages, setChatMessages,
@@ -247,13 +406,24 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         infEnableCanvas, setInfEnableCanvas,
         infCanvasVisible, setInfCanvasVisible,
         infCanvasArtifacts, setInfCanvasArtifacts,
-        infAutoFit, setInfAutoFit,
         infInferenceEngine, setInfInferenceEngine,
+        isEngineUpdating, setupProgressPercent, setupMessage,
+        // setLoadedModels, loadedModels, // Removed from AppContext
+        evaluationMode, setEvaluationMode,
+        arenaSelectedModels, setArenaSelectedModels,
+        arenaScores, setArenaScores,
+        arenaCurrentPair, setArenaCurrentPair,
+        benchmarkMessages, setBenchmarkMessages,
+        selectedBenchmarkModel, setSelectedBenchmarkModel
     } = useApp();
+
+    const isBenchmarking = evaluationMode === 'compare';
+    const isBlindTest = evaluationMode === 'arena';
 
     const [showTools, setShowTools] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     // Resources
     const [modelOptions, setModelOptions] = useState<Option[]>([]);
@@ -261,34 +431,55 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     const [selectedProject, setSelectedProject] = useState('');
     const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
 
-    // UI State
-    const [isSending, setIsSending] = useState(false);
-    const [showSidebar, setShowSidebar] = useState(true);
-    const [showAdvanced, setShowAdvanced] = useState(false);
-    const [showCommandPreview, setShowCommandPreview] = useState(false);
-    const [editingIndex, setEditingIndex] = useState<number | null>(null);
-    const [editText, setEditText] = useState('');
-    const [streamMetrics, setStreamMetrics] = useState<{
-        tokens_per_second: number;
-        prompt_eval_time_ms: number;
-        eval_time_ms: number;
-        total_tokens: number;
-    } | null>(null);
-    // Streaming artifact tracking
-    const streamingArtifactId = useRef<string | null>(null);
+    // Backend Logs / Progress
+    const [promptProgress, setPromptProgress] = useState<number | null>(null); // 0-100 or null
+
+    const {
+        streamMetrics, isPromptProcessing,
+        isSending: isSendingGlobal, setIsSending, setIsPromptProcessing
+    } = useApp();
 
     // Vision
     const [pendingImage, setPendingImage] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // Backend Logs / Progress
-    const [promptProgress, setPromptProgress] = useState<number | null>(null); // 0-100 or null
-    const [isPromptProcessing, setIsPromptProcessing] = useState(false);
-
     const [showToolCreator, setShowToolCreator] = useState(false);
 
+    // UI State
+    // const [isSending, setIsSending] = useState(false); // Replaced by global
+    // Alias it for easier refactoring if needed, or just use isSendingGlobal
+    const isSending = isSendingGlobal;
+
+    const [showSidebar, setShowSidebar] = useState(true);
+    const [showAdvanced, setShowAdvanced] = useState(false);
+    const [showCommandPreview, setShowCommandPreview] = useState(false);
+    const [editingIndex, setEditingIndex] = useState<number | null>(null);
+    const [editText, setEditText] = useState('');
+
+    // Prompt Input State
+
+    const [secondaryBenchStatus, setSecondaryBenchStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+    const [secondaryBenchPort] = useState(8081);
+    const [arenaRevealed, setArenaRevealed] = useState(false);
+    const [showToolsDropup, setShowToolsDropup] = useState(false);
+
+    // Derived states
+    // const isBenchmarking = evaluationMode === 'compare'; // Already derived above
+    // const isBlindTest = evaluationMode === 'arena'; // Already derived above
+    // const [revealIdentity, setRevealIdentity] = useState(false); // Unused for now
+
+    // We already have 'isBenchmarking' (view toggle)
+    // We already have 'benchmarkMessages' (chat history for B)
+    // Actually, I removed them intentionally to verify. Let's keep them removed if unused, or restore if used.
+    // The previous error logs showed benchmarkStreamMetrics usage.
+    const [benchmarkStreamMetrics, setBenchmarkStreamMetrics] = useState<{
+        tokens_per_second: number;
+        prompt_eval_time_ms: number;
+        eval_time_ms: number;
+        total_tokens: number;
+    } | null>(null);
+
     // Layout Resizing
-    const [lastLoadedModel, setLastLoadedModel] = useState<string>(''); // Track what's actually running
     const [canvasWidth, setCanvasWidth] = useState(450);
     const [settingsWidth, setSettingsWidth] = useState(320);
     const [isResizingCanvas, setIsResizingCanvas] = useState(false);
@@ -360,9 +551,15 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     // Re-load resources when engine changes
     useEffect(() => {
         loadResources();
-        // Do not reset detected model here, let Context persist it.
-        // If the model is invalid for the new engine, the user can select a new one.
     }, [infInferenceEngine]);
+
+    // Sync UI selection with global state when a model is loaded
+    useEffect(() => {
+        const globalSelected = state.inference.selectedModelPath;
+        if (globalSelected && globalSelected !== selectedBaseModel) {
+            setSelectedBaseModel(globalSelected);
+        }
+    }, [state.inference.selectedModelPath]);
 
     // Max GPU Layers (Dynamic)
     const [maxGpuLayers, setMaxGpuLayers] = useState(200);
@@ -371,16 +568,11 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     useEffect(() => {
         const unlisten = listen('log', (event: any) => {
             const logMsg = event.payload as string;
-            // Example: "offloading 28 repeating layers to GPU" or "offloaded 29/29 layers to GPU"
-            // We want to find the total layers if possible.
-            // "llama_model_load: n_layer = 32" is standard llama.cpp log but might be hidden in stderr.
-            // "offloading X repeating layers" implies X is the count being offloaded, but total might be X+1 (output).
-
             const match = /offloaded (\d+)\/(\d+) layers/.exec(logMsg);
             if (match) {
                 const total = parseInt(match[2]);
                 setMaxGpuLayers(total);
-                if (infGpuLayers > total) setInfGpuLayers(total); // Clamp
+                if (infGpuLayers > total) setInfGpuLayers(total);
             }
         });
         return () => {
@@ -388,153 +580,35 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         };
     }, [infGpuLayers]);
 
-    // Stream listeners
-    useEffect(() => {
-        let unlistenChunk: () => void;
-        let unlistenDone: () => void;
+    const handleClearConversation = async () => {
+        try {
+            await invoke('clear_chat_history_command');
+            setChatMessages([]);
+            addLogMessage('Chat history cleared');
+        } catch (error) {
+            addLogMessage(`Error clearing chat history: ${error}`);
+        }
+    };
 
-        const setupListeners = async () => {
-            unlistenChunk = await listen('chat-stream-chunk', (event: any) => {
-                const chunk = event.payload as { content: string };
+    const handleEditStart = (index: number) => {
+        setEditingIndex(index);
+        setEditText(chatMessages[index].text);
+    };
 
-                // Received first token => prompt processing done
-                setIsPromptProcessing(false);
-                setPromptProgress(null);
+    const handleEditSave = (index: number) => {
+        setChatMessages(prev => prev.map((msg, i) =>
+            i === index ? { ...msg, text: editText } : msg
+        ));
+        setEditingIndex(null);
+        setEditText('');
+    };
 
-                setChatMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    let fullText = chunk.content;
-
-                    if (lastMsg && lastMsg.sender === 'bot' && lastMsg.isStreaming) {
-                        fullText = lastMsg.text + chunk.content;
-
-                        // --- Canvas Parsing Logic ---
-                        if (infEnableCanvas) {
-                            // Check for canvas content
-                            const contentMatch = /<canvas_content type="(code|markdown|mermaid)"(?: language="(.*?)")?>(.*)/s.exec(fullText);
-                            if (contentMatch) {
-                                const type = contentMatch[1] as any;
-                                const language = contentMatch[2];
-                                // Check if we have closing tag yet
-                                const closingMatch = /(.*?)<\/canvas_content>/s.exec(contentMatch[3]);
-                                const content = closingMatch ? closingMatch[1] : contentMatch[3];
-
-                                setInfCanvasArtifacts(prev => {
-                                    // If streamingArtifactId is null, create new
-                                    if (!streamingArtifactId.current) {
-                                        const newId = `artifact-${Date.now()}`;
-                                        streamingArtifactId.current = newId;
-                                        setInfCanvasVisible(true);
-                                        return [...prev, {
-                                            id: newId,
-                                            title: 'Generated Content',
-                                            mode: type,
-                                            language: language,
-                                            content: content,
-                                            createdAt: Date.now()
-                                        }];
-                                    }
-
-                                    // Update existing
-                                    return prev.map(a => a.id === streamingArtifactId.current ? {
-                                        ...a,
-                                        content: content,
-                                        mode: type,
-                                        language: language
-                                    } : a);
-                                });
-                            }
-
-                            // Edits not yet supported in streaming for new canvas, 
-                            // as we need to match against existing content which is hard in streaming.
-                            // We rely on full replacement for now or handle edits in 'chat-stream-done' if needed.
-                        }
-                        // ----------------------------
-
-                        return [...prev.slice(0, -1), { ...lastMsg, text: fullText }];
-                    } else {
-                        return [...prev, { text: chunk.content, sender: 'bot', timestamp: Date.now(), isStreaming: true }];
-                    }
-                });
-            });
-
-            unlistenDone = await listen('chat-stream-done', async (event: any) => {
-                const metrics = event.payload;
-                setStreamMetrics(metrics);
-
-                // Reset streaming artifact mapping
-                streamingArtifactId.current = null;
-
-                // Get the full message content
-                let fullMessage = '';
-                setChatMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    if (lastMsg && lastMsg.sender === 'bot') {
-                        fullMessage = lastMsg.text;
-                        return [...prev.slice(0, -1), { ...lastMsg, isStreaming: false }];
-                    }
-                    return prev;
-                });
-
-                // Check for tool calls
-                const toolRegex = /<tool_call>\s*<name>(.*?)<\/name>\s*<arguments>(.*?)<\/arguments>\s*<\/tool_call>/s;
-                const match = toolRegex.exec(fullMessage);
-
-                if (match) {
-                    const toolName = match[1].trim();
-                    const argsStr = match[2].trim();
-                    let args = {};
-                    try {
-                        args = JSON.parse(argsStr);
-                    } catch (e) {
-                        addLogMessage(`Failed to parse tool args: ${e}`);
-                    }
-
-                    addLogMessage(`Using tool: ${toolName}`);
-                    setIsSending(true); // Keep sending state active
-
-                    try {
-                        // Execute tool
-                        const result = await invoke('execute_tool_command', { tool_name: toolName, args });
-
-                        // Add tool result to chat
-                        const resultMsg = JSON.stringify(result);
-                        setChatMessages(prev => [...prev, {
-                            text: `Tool Result (${toolName}):\n${resultMsg}`,
-                            sender: 'system',
-                            timestamp: Date.now()
-                        }]);
-
-                        // Send result back to LLM
-                        const nextMessage = `Tool result for ${toolName}:\n${resultMsg}\n\nPlease parse this result and answer the user's original request.`;
-
-                        await invoke('send_chat_message_streaming_command', {
-                            host: '127.0.0.1',
-                            port: 8080, // Using default port as accessing modelConfig here might be tricky in closure, but state is safer
-                            message: nextMessage,
-                            systemPrompt: buildEnhancedSystemPrompt(), // Maintain system prompt
-                            temperature,
-                            topP,
-                            topK,
-                            ctxSize: contextSize,
-                        });
-
-                    } catch (error) {
-                        addLogMessage(`Tool execution failed: ${error}`);
-                        setIsSending(false);
-                    }
-                } else {
-                    setIsSending(false);
-                }
-            });
-        };
-
-        setupListeners();
-        return () => {
-            if (unlistenChunk) unlistenChunk();
-            if (unlistenDone) unlistenDone();
-        };
-    }, []);
+    const handleDeleteMessage = (index: number) => {
+        setChatMessages(prev => prev.filter((_, i) => i !== index));
+        if (isBenchmarking) {
+            setBenchmarkMessages(prev => prev.filter((_, i) => i !== index));
+        }
+    };
 
     // Auto-scroll
     useEffect(() => {
@@ -543,9 +617,17 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
 
     // AUTO-START: When model changes, start server automatically
     // Also auto-switch engine based on model type
+    // Use ref to prevent race condition causing double starts
+    const isAutoStartingRef = useRef(false);
     useEffect(() => {
         const restart = async () => {
             if (selectedBaseModel) {
+                // Prevent duplicate starts from rapid re-renders
+                if (isAutoStartingRef.current) {
+                    addLogMessage(`[DEBUG] Auto-start already in progress, skipping.`);
+                    return;
+                }
+
                 // Determine correct engine based on model type
                 const selectedOption = modelOptions.find(o => o.value === selectedBaseModel);
                 const isGGUF = selectedOption?.engine === 'GGUF' || selectedBaseModel.endsWith('.gguf');
@@ -559,17 +641,23 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
                     return;
                 }
 
-                // Restart if model changed or server is not running
-                if (infServerStatus === 'idle' || infServerStatus === 'error' || lastLoadedModel !== selectedBaseModel) {
+                // Check if this model is already running globally
+                const isAlreadyRunning = loadedModels.some(m => m.name === selectedBaseModel && m.type === correctEngine);
+
+                // Restart if model not running or server in bad state
+                if (!isAlreadyRunning || infServerStatus === 'idle' || infServerStatus === 'error') {
+                    isAutoStartingRef.current = true;
                     addLogMessage(`[AUTO] Starting/Restarting server for model: ${selectedBaseModel}`);
-                    handleStartServer();
+                    await handleStartServer();
+                    // Reset lock after a delay to allow the server to fully start
+                    setTimeout(() => { isAutoStartingRef.current = false; }, 2000);
                 } else {
-                    addLogMessage(`[DEBUG] Server is already ${infServerStatus} with correct model, skipping auto-start.`);
+                    addLogMessage(`[DEBUG] Server is already running ${selectedBaseModel}, skipping auto-start.`);
                 }
             }
         };
         restart();
-    }, [selectedBaseModel, modelOptions, lastLoadedModel]);
+    }, [selectedBaseModel, modelOptions, infInferenceEngine]);
 
     // Update LoRA when checkpoint changes
     useEffect(() => {
@@ -594,14 +682,39 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
                 .filter(r => !r.is_mmproj) // Don't list mmproj in main list
                 .map(r => {
                     const isGGUF = r.type === 'gguf';
-                    const name = isGGUF ? r.path.replace('data/models/', '') : r.name;
+                    let name = r.name;
+                    let quantTag = '';
+
+                    if (isGGUF) {
+                        // Extract quant tag if possible (e.g., Q4_K_M)
+                        // Filename usually: "User-Repo-Q4_K_M.gguf" or "model.Q4_K_M.gguf"
+                        // Or just simple parsing from the name if the backend provides it cleaned.
+                        // Based on typical GGUF naming:
+                        const parts = r.path.split(/[-._]/);
+                        const possibleQuant = parts.find((p: string) => p.startsWith('Q') && p.length <= 8 && /\d/.test(p));
+                        if (possibleQuant) quantTag = possibleQuant;
+
+                        // Clean name: replace -- with /
+                        // Remove "data/models/" prefix if present in name (it shouldn't be, usually stripped)
+                        name = r.name.replace('data/models/', '').replace(/--/g, '/');
+                    } else {
+                        // Transformers model: usually "author/repo"
+                        name = r.name.replace(/--/g, '/');
+                    }
+
+                    // Allow ReactNode in label if component supports it, otherwise string
+                    // Checking Select.tsx, usually it renders label. 
+                    // Let's assume for now we construct a nice string or use a custom format if Select supports it.
+                    // If Select expects string label, we can't emit JSX. 
+                    // Let's rely on text format: "Author/Repo [Q4_K_M]"
+                    const label = isGGUF ? `${name} ${quantTag ? `[${quantTag}]` : ''}` : name;
 
                     // Check if this model has a matching mmproj (vision)
-                    const hasVision = resources.some(res => res.is_mmproj && res.path.includes(name.split('-')[0]));
+                    const hasVision = resources.some(res => res.is_mmproj && res.path.includes(name.split('/')[1] || name));
 
                     return {
-                        value: isGGUF ? r.path : name,
-                        label: isGGUF ? name : `${name} (Experimental)`,
+                        value: isGGUF ? r.path : r.name, // base models use name for transformers
+                        label: label,
                         engine: isGGUF ? 'GGUF' : 'Base' as any,
                         hasVision: hasVision
                     };
@@ -625,91 +738,233 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         }
     };
 
-    const handleStartServer = async () => {
-        if (!selectedBaseModel) {
-            addLogMessage('[DEBUG] handleStartServer called but no model selected.');
+    const startServerInstance = async (
+        slot: 0 | 1,
+        model: string,
+        _requestedPort: number, // Ignore requested port, enforce slot-based port
+        engine: 'llamacpp' | 'transformers'
+    ) => {
+        const isPrimary = slot === 0;
+        const setStatus = isPrimary ? setInfServerStatus : setSecondaryBenchStatus;
+        const logPrefix = isPrimary ? '[Primary]' : '[Secondary]';
+
+        // Enforce slot-based ports to prevent conflicts
+        // Slot 0 -> 8080, Slot 1 -> 8081
+        const port = 8080 + slot;
+
+        if (!model) {
+            addLogMessage(`${logPrefix} Start called but no model selected.`);
             return;
         }
 
-        addLogMessage(`[DEBUG] Starting server with engine=${infInferenceEngine}, model=${selectedBaseModel}`);
-        setInfServerStatus('loading');
+        addLogMessage(`${logPrefix} Starting server (Engine: ${engine}, Model: ${model}, Port: ${port})`);
+        setStatus('loading');
 
         try {
-            const port = modelConfig?.serverPort || 8080;
-            addLogMessage(`[DEBUG] Using port ${port}`);
-
-            if (infInferenceEngine === 'transformers') {
-                addLogMessage('[DEBUG] Invoking start_transformers_server_command...');
+            if (engine === 'transformers') {
+                if (!isPrimary) {
+                    addLogMessage(`${logPrefix} Transformers engine not yet supported for secondary slot.`);
+                    setStatus('error');
+                    return;
+                }
                 await invoke('start_transformers_server_command', {
-                    modelPath: selectedBaseModel,
+                    modelPath: model,
                     port: port
                 });
             } else {
-                addLogMessage('[DEBUG] Invoking start_llama_server_command...');
                 await invoke('start_llama_server_command', {
-                    modelPath: selectedBaseModel,
+                    modelPath: model,
                     mmprojPath: '',
-                    loraPath: selectedLoraAdapter || null,
-                    port: port,
-                    gpuLayers: infAutoFit ? null : infGpuLayers,
+                    loraPath: '',
+                    gpuLayers: infGpuLayers,
                     ctxSize: contextSize,
                     batchSize: infBatchSize,
                     ubatchSize: infUbatchSize,
-                    threads: infThreads > 0 ? infThreads : null,
+                    threads: infThreads,
                     flashAttn: infFlashAttn,
                     noMmap: infNoMmap,
-                    autoFit: infAutoFit,
+                    port: port,
+                    slotId: slot
                 });
             }
 
-            addLogMessage(`Server (${infInferenceEngine}) process launched. Waiting for readiness...`);
-
-            // Poll for health
-            let retries = 0;
-            const maxRetries = 60; // 30 seconds (500ms interval)
-            const pollInterval = setInterval(async () => {
+            // Verify health
+            let attempts = 0;
+            const maxAttempts = 15;
+            const checkInterval = setInterval(async () => {
+                attempts++;
                 const isHealthy = await checkServerHealth(port);
                 if (isHealthy) {
-                    clearInterval(pollInterval);
-                    setIsServerRunning(true);
-                    setInfServerStatus('ready');
-                    setLastLoadedModel(selectedBaseModel); // Track successfully loaded model
-                    addLogMessage('Server is ready and accepting requests.');
-                } else {
-                    retries++;
-                    if (retries % 10 === 0) {
-                        addLogMessage(`[DEBUG] Health check attempt ${retries}/${maxRetries}...`);
-                    }
-                    if (retries > maxRetries) {
-                        clearInterval(pollInterval);
-                        setInfServerStatus('error');
-                        setIsServerRunning(false);
-                        addLogMessage('Error: Server startup timed out. Check logs above for backend errors.');
-                        await handleStopServer();
-                    }
+                    clearInterval(checkInterval);
+                    setStatus('ready');
+                    addLogMessage(`${logPrefix} Server ready on port ${port}`);
+                    if (isPrimary) setIsServerRunning(true);
+                    // Register the loaded model globally with the CORRECT port
+                    loadModel({
+                        path: model,
+                        name: model,
+                        type: engine,
+                        serverId: `server-${slot}`,
+                        serverPort: port,
+                        hasMMProj: false
+                    });
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(checkInterval);
+                    setStatus('error');
+                    addLogMessage(`${logPrefix} Server failed to respond after ${maxAttempts} attempts.`);
                 }
-            }, 500);
+            }, 1000);
 
         } catch (error) {
-            addLogMessage(`[ERROR] Starting server failed: ${error}`);
-            setInfServerStatus('error');
+            addLogMessage(`${logPrefix} Error starting server: ${error}`);
+            setStatus('error');
         }
     };
 
-    const handleStopServer = async () => {
-        try {
-            // Robust handling: stop BOTH possible backend processes regardless of current setting
-            // to ensure the port is truly cleared during switches.
-            await Promise.allSettled([
-                invoke('stop_transformers_server_command'),
-                invoke('stop_llama_server_command')
-            ]);
+    const handleStartServer = async () => {
+        // Start Primary
+        await startServerInstance(0, selectedBaseModel, modelConfig?.serverPort || 8080, infInferenceEngine);
 
+        // If Benchmarking/Blind Test is active and secondary model is selected, start it too
+        if ((isBenchmarking || isBlindTest) && selectedBenchmarkModel) {
+            // Force GGUF for secondary for now? Or auto-detect?
+            // Simple generic auto-detect:
+            const isGGUF = selectedBenchmarkModel.endsWith('.gguf');
+            // Only support llama/GGUF for secondary for now as per plan
+            if (isGGUF) {
+                // Delay slightly to avoid port race or resource spike?
+                setTimeout(() => {
+                    startServerInstance(1, selectedBenchmarkModel, secondaryBenchPort, 'llamacpp');
+                }, 1000);
+            } else {
+                addLogMessage('[Secondary] Only GGUF models are currently supported for secondary slot.');
+            }
+        }
+    };
+
+    const handleStopServer = async (clearSelection = false) => {
+        try {
+            // Stop both slots by ID (not port)
+            await invoke('stop_llama_server_command', { slotId: 0 });
+            await invoke('stop_llama_server_command', { slotId: 1 });
             setIsServerRunning(false);
             setInfServerStatus('idle');
-            addLogMessage('Inference engine stopped');
+            if (clearSelection) {
+                setSelectedBaseModel(''); // Only clear if explicitly ejecting
+                // Also remove from loadedModels in context to reflect 'Eject' immediately
+                const currentModel = loadedModels.find(m => m.name === selectedBaseModel);
+                if (currentModel) {
+                    // We need a way to unload from context. We'll rely on the polling/sync or add unloadModel to destructuring
+                }
+            }
+            setSecondaryBenchStatus('idle');
+            setArenaCurrentPair(null);
+            setArenaRevealed(false);
         } catch (error) {
             addLogMessage(`Error stopping server: ${error}`);
+        }
+    };
+
+    const handleStartArena = async () => {
+        if (arenaSelectedModels.length < 2) {
+            addLogMessage('Select at least 2 models for the Arena pool.');
+            return;
+        }
+
+        // Randomly pick two distinct models from the pool
+        const pool = [...arenaSelectedModels];
+        const idx1 = Math.floor(Math.random() * pool.length);
+        const model1 = pool.splice(idx1, 1)[0];
+        const idx2 = Math.floor(Math.random() * pool.length);
+        const model2 = pool.splice(idx2, 1)[0];
+
+        setArenaCurrentPair([model1, model2]);
+        setArenaRevealed(false);
+        handleClearConversation();
+
+        // Start both servers
+        setInfServerStatus('loading');
+        setSecondaryBenchStatus('loading');
+
+        try {
+            // Start model1 on primary slot (0)
+            await invoke('start_llama_server_command', {
+                modelPath: model1,
+                mmprojPath: '',
+                loraPath: null,
+                port: modelConfig?.serverPort || 8080,
+                gpuLayers: infGpuLayers > 0 ? infGpuLayers : null,
+                ctxSize: contextSize,
+                batchSize: infBatchSize,
+                ubatchSize: infUbatchSize,
+                threads: infThreads > 0 ? infThreads : null,
+                flashAttn: infFlashAttn,
+                noMmap: infNoMmap,
+                slotId: 0
+            });
+            setInfServerStatus('ready');
+
+            // Start model2 on secondary slot (1)
+            await invoke('start_llama_server_command', {
+                modelPath: model2,
+                mmprojPath: '',
+                loraPath: null,
+                port: secondaryBenchPort,
+                gpuLayers: infGpuLayers > 0 ? infGpuLayers : null,
+                ctxSize: contextSize,
+                batchSize: infBatchSize,
+                ubatchSize: infUbatchSize,
+                threads: infThreads > 0 ? infThreads : null,
+                flashAttn: infFlashAttn,
+                noMmap: infNoMmap,
+                slotId: 1
+            });
+            setSecondaryBenchStatus('ready');
+            setIsServerRunning(true);
+        } catch (error) {
+            setInfServerStatus('error');
+            setSecondaryBenchStatus('error');
+            addLogMessage(`Arena start failed: ${error}`);
+        }
+    };
+
+    const handleArenaVote = (winner: 'left' | 'right' | 'tie' | 'followup') => {
+        if (!arenaCurrentPair || winner === 'followup') {
+            if (winner === 'followup') {
+                // Just keep current pair and reveal if not already
+                setArenaRevealed(true);
+            }
+            return;
+        }
+
+        const [modelA, modelB] = arenaCurrentPair;
+        setArenaScores(prev => {
+            const next = { ...prev };
+            if (!next[modelA]) next[modelA] = { wins: 0, ties: 0, total: 0 };
+            if (!next[modelB]) next[modelB] = { wins: 0, ties: 0, total: 0 };
+
+            next[modelA].total += 1;
+            next[modelB].total += 1;
+
+            if (winner === 'left') next[modelA].wins += 1;
+            if (winner === 'right') next[modelB].wins += 1;
+            if (winner === 'tie') {
+                next[modelA].ties += 0.5;
+                next[modelB].ties += 0.5;
+            }
+            return next;
+        });
+
+        setArenaRevealed(true);
+    };
+
+    const handleStopGeneration = async () => {
+        try {
+            setIsSending(false);
+            setIsPromptProcessing(false);
+            addLogMessage('Generation stopped by user.');
+        } catch (e) {
+            console.error(e);
         }
     };
 
@@ -819,21 +1074,38 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
         if (!messageToSend) {
             setInputMessage('');
             setPendingImage(null); // Clear image after sending
+            // Reset textarea height
+            if (textareaRef.current) {
+                textareaRef.current.style.height = '44px';
+            }
+
+            const timestamp = Date.now();
             setChatMessages(prev => [...prev, {
+                id: generateId(),
                 text: msg,
                 sender: 'user',
-                timestamp: Date.now(),
-                image: pendingImage // Optimistic update (need to add image prop to type if displaying)
+                timestamp,
+                image: pendingImage
             }]);
+
+            if (isBenchmarking) {
+                setBenchmarkMessages(prev => [...prev, {
+                    id: generateId(),
+                    text: msg,
+                    sender: 'user',
+                    timestamp,
+                    image: pendingImage
+                }]);
+            }
         }
 
         setIsSending(true);
-        setIsPromptProcessing(true); // Start processing animation
-        setPromptProgress(0); // Optional: if we can't get realprogress, we might animate this dummy
-        setStreamMetrics(null);
+        setIsPromptProcessing(true);
+        setPromptProgress(0);
+        // setStreamMetrics(null); // Managed globally now
+        setBenchmarkStreamMetrics(null);
 
         // Construct payload
-        // If image exists, send array format
         let payload: any = msg;
         if (pendingImage) {
             payload = [
@@ -842,50 +1114,87 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
             ];
         }
 
+        const commonParams = {
+            host: '127.0.0.1',
+            systemPrompt: buildEnhancedSystemPrompt(),
+            temperature,
+            topP,
+            topK,
+            ctxSize: contextSize,
+        };
+
         try {
-            await invoke('send_chat_message_streaming_command', {
-                host: '127.0.0.1',
-                port: modelConfig?.serverPort || 8080,
-                message: payload,
-                systemPrompt: buildEnhancedSystemPrompt(),
-                temperature,
-                topP,
-                topK,
-                ctxSize: contextSize,
+            // Resolving correct port based on selected model
+            const targetModel = loadedModels.find(m => m.name === selectedBaseModel);
+            const targetPort = targetModel?.serverPort || 8080;
+            const isVision = targetModel?.hasMMProj || false;
+
+
+            // Re-constructing logic:
+            const historyToSync = chatMessages.map(m => {
+                if (m.sender === 'bot') {
+                    return { role: 'assistant', content: m.text };
+                }
+                let content: any = m.text;
+                if (m.image) {
+                    if (isVision) {
+                        content = [
+                            { type: 'text', text: m.text },
+                            { type: 'image_url', image_url: { url: m.image } }
+                        ];
+                    } else {
+                        content = m.text + " [Image Omitted]";
+                    }
+                }
+                return { role: 'user', content };
             });
+
+            // Current message payload sanitization
+            let cleanPayload: any = msg;
+            if (pendingImage) {
+                if (isVision) {
+                    cleanPayload = [
+                        { type: 'text', text: msg },
+                        { type: 'image_url', image_url: { url: pendingImage } }
+                    ];
+                } else {
+                    cleanPayload = msg + " [Image Omitted]";
+                }
+            }
+
+            const primaryRequest = invoke('send_chat_message_streaming_command', {
+                ...commonParams,
+                port: targetPort,
+                message: cleanPayload,
+                label: null, // default stream
+                full_history: historyToSync
+            });
+
+            if (isBenchmarking || isBlindTest) {
+                if (!selectedBenchmarkModel) {
+                    addLogMessage('[Secondary] No secondary model selected for benchmark.');
+                    await primaryRequest;
+                } else {
+                    const benchmarkRequest = invoke('send_chat_message_streaming_command', {
+                        ...commonParams,
+                        port: secondaryBenchPort,
+                        message: payload,
+                        label: 'benchmark'
+                    });
+
+                    await Promise.all([primaryRequest, benchmarkRequest]);
+                }
+            } else {
+                await primaryRequest;
+            }
+            setIsSending(false);
         } catch (error) {
             addLogMessage(`Error sending message: ${error}`);
-            setChatMessages(prev => [...prev, { text: 'Error: Failed to send message.', sender: 'system', timestamp: Date.now() }]);
+            setChatMessages(prev => [...prev, { id: generateId(), text: 'Error: Failed to send message.', sender: 'system', timestamp: Date.now() }]);
             setIsSending(false);
         }
     };
 
-    const handleClearConversation = async () => {
-        try {
-            await invoke('clear_chat_history_command');
-            setChatMessages([]);
-            addLogMessage('Chat history cleared');
-        } catch (error) {
-            addLogMessage(`Error clearing chat history: ${error}`);
-        }
-    };
-
-    const handleEditStart = (index: number) => {
-        setEditingIndex(index);
-        setEditText(chatMessages[index].text);
-    };
-
-    const handleEditSave = (index: number) => {
-        setChatMessages(prev => prev.map((msg, i) =>
-            i === index ? { ...msg, text: editText } : msg
-        ));
-        setEditingIndex(null);
-        setEditText('');
-    };
-
-    const handleDeleteMessage = (index: number) => {
-        setChatMessages(prev => prev.filter((_, i) => i !== index));
-    };
 
     // Generate command preview
     const commandPreview = useMemo(() => {
@@ -894,12 +1203,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
         parts.push(`--model "${selectedBaseModel}"`);
         parts.push(`--port ${modelConfig?.serverPort || 8080}`);
         parts.push(`--ctx-size ${contextSize}`);
-        if (infAutoFit) {
-            parts.push('--fit on');
-            parts.push('--fit-margin 1024');
-        } else {
-            parts.push(`--n-gpu-layers ${infGpuLayers}`);
-        }
+        parts.push(`--n-gpu-layers ${infGpuLayers > 0 ? infGpuLayers : 999}`);
         parts.push(`--batch-size ${infBatchSize}`);
         parts.push(`--ubatch-size ${infUbatchSize}`);
         if (infFlashAttn) parts.push('--flash-attn on');
@@ -907,7 +1211,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
         if (infThreads > 0) parts.push(`--threads ${infThreads}`);
         if (selectedLoraAdapter) parts.push(`--lora "${selectedLoraAdapter}"`);
         return parts.join(' \\\n  ');
-    }, [selectedBaseModel, contextSize, infGpuLayers, infBatchSize, infUbatchSize, infFlashAttn, infNoMmap, infThreads, selectedLoraAdapter, modelConfig, infAutoFit]);
+    }, [selectedBaseModel, contextSize, infGpuLayers, infBatchSize, infUbatchSize, infFlashAttn, infNoMmap, infThreads, selectedLoraAdapter, modelConfig]);
 
     // Status indicator component
     const StatusIndicator = () => {
@@ -930,7 +1234,63 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
     const isCanvasVisible = infEnableCanvas && infCanvasVisible;
 
     return (
-        <div style={{ display: 'flex', height: 'calc(100vh - 100px)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', height: 'calc(100vh - 100px)', overflow: 'hidden', position: 'relative' }}>
+            {/* Background Update Overlay */}
+            {isEngineUpdating && (
+                <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    zIndex: 2000,
+                    background: 'rgba(9, 9, 11, 0.85)',
+                    backdropFilter: 'blur(12px)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '24px',
+                    padding: '40px',
+                    textAlign: 'center'
+                }}>
+                    <div style={{
+                        width: '80px',
+                        height: '80px',
+                        borderRadius: '24px',
+                        background: 'rgba(139, 92, 246, 0.1)',
+                        border: '1px solid rgba(139, 92, 246, 0.2)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginBottom: '8px'
+                    }}>
+                        <Loader2 size={40} className="animate-spin text-accent-primary" />
+                    </div>
+
+                    <div>
+                        <h2 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '8px', background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                            Updating Inference Engine
+                        </h2>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '14px', maxWidth: '400px' }}>
+                            We're preparing the latest version of the LlamaCPP core for peak performance.
+                        </p>
+                    </div>
+
+                    <div style={{ width: '100%', maxWidth: '400px' }}>
+                        <div style={{ height: '6px', width: '100%', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden', marginBottom: '12px' }}>
+                            <div style={{
+                                height: '100%',
+                                width: `${setupProgressPercent}%`,
+                                background: 'var(--accent-gradient)',
+                                boxShadow: '0 0 15px var(--accent-primary)',
+                                transition: 'width 0.3s ease'
+                            }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                            <span style={{ textTransform: 'uppercase' }}>{setupMessage || 'UPDATING...'}</span>
+                            <span>{setupProgressPercent}%</span>
+                        </div>
+                    </div>
+                </div>
+            )}
             <style>{`
                 @keyframes wiggle {
                     0%, 100% { transform: translateY(0); }
@@ -952,10 +1312,48 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                     alignItems: 'center',
                     gap: '12px',
                     padding: '12px 16px',
-                    background: 'linear-gradient(135deg, rgba(30,30,40,0.95) 0%, rgba(25,25,35,0.95) 100%)',
-                    borderBottom: '1px solid rgba(255,255,255,0.08)',
+                    background: 'var(--bg-surface, #121216)',
+                    borderBottom: '1px solid var(--border-subtle, rgba(255,255,255,0.05))',
+                    boxShadow: 'var(--shadow-sm, 0 2px 4px rgba(0,0,0,0.12))',
                     flexShrink: 0
                 }}>
+                    {/* Evaluation Mode Toggle */}
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                        <button
+                            onClick={() => {
+                                const modes: ('off' | 'compare' | 'arena')[] = ['off', 'compare', 'arena'];
+                                const currentIdx = modes.indexOf(evaluationMode);
+                                setEvaluationMode(modes[(currentIdx + 1) % 3]);
+                            }}
+                            style={{
+                                width: '36px', height: '36px',
+                                borderRadius: '8px',
+                                background: evaluationMode !== 'off' ? 'rgba(167, 139, 250, 0.2)' : 'rgba(255,255,255,0.05)',
+                                border: evaluationMode !== 'off' ? '1px solid rgba(167, 139, 250, 0.5)' : '1px solid rgba(255,255,255,0.1)',
+                                color: evaluationMode !== 'off' ? '#a78bfa' : '#9ca3af',
+                                cursor: 'pointer',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                transition: 'all 0.2s'
+                            }}
+                            title={`Evaluation Mode: ${evaluationMode.charAt(0).toUpperCase() + evaluationMode.slice(1)}`}
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" />
+                                <line x1="12" y1="3" x2="12" y2="21" />
+                            </svg>
+                        </button>
+                        {evaluationMode !== 'off' && (
+                            <span style={{
+                                position: 'absolute', top: '100%', left: '0', marginTop: '4px',
+                                fontSize: '10px', color: '#a78bfa', whiteSpace: 'nowrap',
+                                background: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: '4px',
+                                zIndex: 100
+                            }}>
+                                {evaluationMode === 'arena' ? 'Arena Mode' : 'Compare Mode'}
+                            </span>
+                        )}
+                    </div>
+
                     {/* Model Selector */}
                     <div style={{ flex: 2, maxWidth: '500px' }}>
                         <Select
@@ -966,7 +1364,10 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 if (opt) {
                                     setInfInferenceEngine(opt.engine === 'GGUF' ? 'llamacpp' : 'transformers');
                                 }
-                                if (isServerRunning) handleStopServer();
+                                if (opt) {
+                                    setInfInferenceEngine(opt.engine === 'GGUF' ? 'llamacpp' : 'transformers');
+                                }
+                                if (isServerRunning) handleStopServer(false); // Don't clear selection, we are switching
                                 setSelectedBaseModel(val);
                             }}
                             options={[
@@ -982,39 +1383,31 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
 
                     {/* LoRA Selector */}
                     <div style={{ flex: 1, maxWidth: '250px' }}>
-                        <select
+                        <Select
                             value={selectedProject}
-                            onChange={(e) => {
-                                setSelectedProject(e.target.value);
-                                if (!e.target.value) {
+                            onChange={(val) => {
+                                setSelectedProject(val);
+                                if (!val) {
                                     setSelectedCheckpoint('');
                                     setSelectedLoraAdapter('');
                                 } else {
-                                    const project = projectLoras.find(p => p.project_name === e.target.value);
+                                    const project = projectLoras.find(p => p.project_name === val);
                                     if (project && project.checkpoints.length > 0) {
                                         setSelectedCheckpoint(project.checkpoints[0].name);
                                         setSelectedLoraAdapter(project.checkpoints[0].path);
                                     }
                                 }
                             }}
+                            options={[
+                                { value: '', label: 'No LoRA' },
+                                ...projectLoras.map(p => ({
+                                    value: p.project_name,
+                                    label: `🔗 ${p.project_name}`
+                                }))
+                            ]}
+                            placeholder="Select LoRA Adapter"
                             disabled={infServerStatus === 'loading'}
-                            style={{
-                                width: '100%',
-                                padding: '10px 14px',
-                                background: 'rgba(0,0,0,0.3)',
-                                border: '1px solid rgba(167,139,250,0.3)',
-                                borderRadius: '10px',
-                                color: selectedProject ? '#a78bfa' : '#9ca3af',
-                                fontSize: '14px',
-                                cursor: 'pointer',
-                                outline: 'none'
-                            }}
-                        >
-                            <option value="">No LoRA</option>
-                            {projectLoras.map(p => (
-                                <option key={p.project_name} value={p.project_name}>🔗 {p.project_name}</option>
-                            ))}
-                        </select>
+                        />
                     </div>
 
                     {/* Status */}
@@ -1042,7 +1435,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                     {/* Eject Button */}
                     {isServerRunning && (
                         <button
-                            onClick={handleStopServer}
+                            onClick={() => handleStopServer(true)}
                             style={{
                                 padding: '8px 12px',
                                 background: 'rgba(239,68,68,0.15)',
@@ -1085,15 +1478,17 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                         flex: 1,
                         display: 'flex',
                         flexDirection: 'column',
-                        background: 'rgba(15,15,20,0.5)',
+                        background: 'var(--bg-app, #09090b)',
                         minWidth: '300px',
-                        overflow: 'hidden'
+                        overflow: 'hidden',
+                        position: 'relative'
                     }}>
+
                         {/* Messages */}
-                        <div style={{ flex: 1, overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div style={{ flex: 1, overflowY: 'auto', padding: '24px', paddingBottom: '160px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                             {chatMessages.length === 0 && (
                                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', opacity: 0.4 }}>
-                                    <Bot size={56} style={{ marginBottom: '16px' }} />
+                                    <Brain size={56} style={{ marginBottom: '16px' }} />
                                     <p style={{ fontSize: '16px', color: '#9ca3af' }}>
                                         {infServerStatus === 'idle' ? 'Select a model to start chatting' :
                                             infServerStatus === 'loading' ? 'Loading model...' :
@@ -1102,157 +1497,399 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 </div>
                             )}
 
-                            {chatMessages.map((msg, idx) => (
-                                <div key={idx} style={{ display: 'flex', gap: '12px', flexDirection: msg.sender === 'user' ? 'row-reverse' : 'row', alignItems: 'flex-start' }}>
-                                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: msg.sender === 'user' ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)' }}>
-                                        {msg.sender === 'user' ? <User size={18} /> : <Bot size={18} />}
-                                    </div>
-                                    <div style={{ flex: 1, maxWidth: '85%' }}>
-                                        {editingIndex === idx ? (
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                <textarea
-                                                    value={editText}
-                                                    onChange={(e) => setEditText(e.target.value)}
-                                                    style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '10px', padding: '12px', color: 'white', minHeight: '80px', resize: 'vertical', width: '100%' }}
+                            {/* Compare Mode: Two Columns with Model Dropdowns */}
+                            {evaluationMode === 'compare' && (
+                                <div style={{ display: 'flex', gap: '24px', height: '100%' }}>
+                                    {/* Column A - Primary Model */}
+                                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', borderRight: '1px solid rgba(255,255,255,0.05)', paddingRight: '12px' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px', background: 'rgba(59,130,246,0.05)', borderRadius: '8px' }}>
+                                            <Select
+                                                value={selectedBaseModel}
+                                                onChange={(val) => setSelectedBaseModel(val)}
+                                                options={modelOptions}
+                                                placeholder="Select Model A"
+                                            />
+                                        </div>
+                                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+                                            {chatMessages.map((msg, idx) => (
+                                                <MessageItem
+                                                    key={msg.id || idx} msg={msg} idx={idx} isSecondary={false}
+                                                    editingIndex={editingIndex} editText={editText} setEditText={setEditText}
+                                                    handleEditSave={handleEditSave} handleEditStart={handleEditStart}
+                                                    handleDeleteMessage={handleDeleteMessage} setEditingIndex={setEditingIndex}
+                                                    streamMetrics={streamMetrics} infShowMetrics={infShowMetrics}
+                                                    isLast={idx === chatMessages.length - 1}
                                                 />
-                                                <div style={{ display: 'flex', gap: '8px' }}>
-                                                    <Button size="sm" onClick={() => handleEditSave(idx)}>Save</Button>
-                                                    <Button size="sm" variant="ghost" onClick={() => setEditingIndex(null)}>Cancel</Button>
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <>
-                                                <div style={{
-                                                    padding: '14px 18px',
-                                                    borderRadius: '18px',
-                                                    borderTopRightRadius: msg.sender === 'user' ? '4px' : '18px',
-                                                    borderTopLeftRadius: msg.sender === 'user' ? '18px' : '4px',
-                                                    background: msg.sender === 'user' ? 'var(--accent-primary)' : 'rgba(255,255,255,0.08)',
-                                                    color: msg.sender === 'user' ? 'white' : '#e5e7eb'
-                                                }}>
-                                                    {msg.sender === 'bot' ? (() => {
-                                                        const blocks = parseMessageContentBlocks(msg.text);
-                                                        return (
-                                                            <>
-                                                                {blocks.map((block, bIdx) => {
-                                                                    if (block.type === 'thinking') return <ThinkingBlock key={bIdx} content={block.content} />;
-                                                                    if (block.type === 'tool_call') return <ToolCallBlock key={bIdx} content={block.content} />;
-                                                                    if (block.type === 'tool_result') return <ToolResultBlock key={bIdx} content={block.content} />;
-                                                                    return <MarkdownRenderer key={bIdx} content={block.content} />;
-                                                                })}
-                                                            </>
-                                                        );
-                                                    })() : (
-                                                        <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6, margin: 0 }}>{msg.text}</p>
-                                                    )}
-                                                    {msg.sender === 'bot' && !msg.isStreaming && streamMetrics && idx === chatMessages.length - 1 && infShowMetrics && (
-                                                        <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-                                                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Zap size={12} /> {streamMetrics.tokens_per_second.toFixed(1)} t/s</span>
-                                                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><BarChart2 size={12} /> {streamMetrics.total_tokens} tokens</span>
-                                                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={12} /> Prompt: {streamMetrics.prompt_eval_time_ms.toFixed(0)}ms</span>
-                                                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={12} /> Eval: {streamMetrics.eval_time_ms.toFixed(0)}ms</span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                <div style={{ display: 'flex', gap: '6px', marginTop: '6px', justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start' }}>
-                                                    <button onClick={() => handleEditStart(idx)} style={{ padding: '4px 8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                        <Edit2 size={10} /> Edit
-                                                    </button>
-                                                    <button onClick={() => handleDeleteMessage(idx)} style={{ padding: '4px 8px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '6px', color: 'rgba(239,68,68,0.7)', cursor: 'pointer', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                        <Trash2 size={10} /> Delete
-                                                    </button>
-                                                </div>
-                                            </>
-                                        )}
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
-                            <div ref={messagesEndRef} />
-                        </div>
-
-                        {/* Input Area */}
-                        <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(20,20,25,0.8)' }}>
-                            {/* Image Preview */}
-                            {pendingImage && (
-                                <div style={{ marginBottom: '12px', display: 'flex' }}>
-                                    <div style={{ position: 'relative', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
-                                        <img src={pendingImage} alt="preview" style={{ height: '80px', display: 'block' }} />
-                                        <button
-                                            onClick={handleRemoveImage}
-                                            style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,0.6)', borderRadius: '50%', padding: '2px', border: 'none', color: 'white', cursor: 'pointer' }}
-                                        >
-                                            <X size={12} />
-                                        </button>
+                                    {/* Column B - Secondary Model */}
+                                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px', background: 'rgba(167,139,250,0.05)', borderRadius: '8px' }}>
+                                            <Select
+                                                value={selectedBenchmarkModel}
+                                                onChange={(val) => setSelectedBenchmarkModel(val)}
+                                                options={modelOptions}
+                                                placeholder="Select Model B"
+                                            />
+                                        </div>
+                                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+                                            {benchmarkMessages.map((msg, idx) => (
+                                                <MessageItem
+                                                    key={msg.id || idx} msg={msg} idx={idx} isSecondary={true}
+                                                    editingIndex={editingIndex} editText={editText} setEditText={setEditText}
+                                                    handleEditSave={handleEditSave} handleEditStart={handleEditStart}
+                                                    handleDeleteMessage={handleDeleteMessage} setEditingIndex={setEditingIndex}
+                                                    streamMetrics={benchmarkStreamMetrics} infShowMetrics={infShowMetrics}
+                                                    isLast={idx === benchmarkMessages.length - 1}
+                                                />
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
                             )}
 
-                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }}>
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    onChange={handleFileSelect}
-                                    style={{ display: 'none' }}
-                                    accept="image/*"
-                                />
-                                <button
-                                    onClick={() => fileInputRef.current?.click()}
-                                    style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', color: modelOptions.length > 0 ? '#e4e4e7' : '#52525b', cursor: 'pointer' }}
-                                    title="Attach Image"
-                                >
-                                    <Paperclip size={18} />
-                                </button>
-
-                                {infEnableCanvas && (
-                                    <button
-                                        onClick={() => setInfCanvasVisible(!infCanvasVisible)}
-                                        style={{ padding: '10px', background: infCanvasVisible ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', color: infCanvasVisible ? '#a78bfa' : '#9ca3af', cursor: 'pointer' }}
-                                        title="Toggle Canvas"
-                                    >
-                                        <PenTool size={18} />
-                                    </button>
-                                )}
-
-                                {chatMessages.length > 0 && (
-                                    <button onClick={handleClearConversation} style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', color: '#9ca3af', cursor: 'pointer' }} title="Clear Chat">
-                                        <RotateCcw size={18} />
-                                    </button>
-                                )}
-                                <input
-                                    style={{ flex: 1, padding: '14px 18px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: 'white', fontSize: '15px', outline: 'none' }}
-                                    placeholder={
-                                        infServerStatus === 'ready'
-                                            ? (isPromptProcessing ? 'Processing prompt...' : 'Type a message...')
-                                            : 'Load a model to start chatting'
-                                    }
-                                    value={inputMessage}
-                                    onChange={(e) => setInputMessage(e.target.value)}
-                                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                                    disabled={infServerStatus !== 'ready' || isSending}
-                                />
-                                {isPromptProcessing && (
-                                    <div style={{ position: 'absolute', right: '90px', top: '50%', transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: '6px', pointerEvents: 'none', zIndex: 10 }}>
-                                        <div className="processing-wiggle" style={{
-                                            fontSize: '12px', color: '#a78bfa', fontWeight: 600,
-                                            animation: 'wiggle 1s ease-in-out infinite',
-                                            padding: '4px 8px', borderRadius: '4px',
-                                            background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)'
-                                        }}>
-                                            Processing {promptProgress !== null ? `${promptProgress}%` : '...'}
+                            {/* Arena Mode: Blind Testing with Voting */}
+                            {evaluationMode === 'arena' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' }}>
+                                    {/* Arena Pool and Start Button */}
+                                    <div style={{ padding: '12px', background: 'rgba(167,139,250,0.05)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span style={{ fontSize: '11px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Arena Pool (select 2+ models)</span>
+                                            <button
+                                                onClick={handleStartArena}
+                                                disabled={arenaSelectedModels.length < 2 || isSending}
+                                                style={{
+                                                    padding: '6px 12px', background: 'var(--accent-primary, #8b5cf6)',
+                                                    border: 'none', borderRadius: '6px', color: 'white',
+                                                    fontSize: '12px', fontWeight: 'bold', cursor: 'pointer',
+                                                    opacity: (arenaSelectedModels.length < 2 || isSending) ? 0.5 : 1,
+                                                    display: 'flex', alignItems: 'center', gap: '6px'
+                                                }}
+                                            >
+                                                <Play size={12} fill="currentColor" /> Start Arena Run
+                                            </button>
+                                        </div>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                            {modelOptions.map((opt) => (
+                                                <button
+                                                    key={opt.value}
+                                                    onClick={() => {
+                                                        setArenaSelectedModels(prev =>
+                                                            prev.includes(opt.value)
+                                                                ? prev.filter(m => m !== opt.value)
+                                                                : [...prev, opt.value]
+                                                        );
+                                                    }}
+                                                    style={{
+                                                        padding: '4px 8px', fontSize: '11px', borderRadius: '4px',
+                                                        background: arenaSelectedModels.includes(opt.value) ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.05)',
+                                                        border: arenaSelectedModels.includes(opt.value) ? '1px solid #a78bfa' : '1px solid rgba(255,255,255,0.1)',
+                                                        color: arenaSelectedModels.includes(opt.value) ? '#a78bfa' : '#9ca3af',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
                                         </div>
                                     </div>
+
+                                    {/* Scoreboard (Collapsible) */}
+                                    {Object.keys(arenaScores).length > 0 && (
+                                        <div style={{ padding: '10px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', fontSize: '11px' }}>
+                                            <div style={{ fontWeight: 'bold', marginBottom: '8px', color: '#a78bfa' }}>Scoreboard</div>
+                                            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                                                {Object.entries(arenaScores).map(([model, score]) => (
+                                                    <div key={model} style={{ textAlign: 'center' }}>
+                                                        <div style={{ color: '#fff', fontWeight: '600' }}>{model.split('/').pop()?.split('.')[0]}</div>
+                                                        <div style={{ color: '#a78bfa' }}>{score.wins + score.ties * 0.5}</div>
+                                                        <div style={{ color: '#6b7280' }}>{((score.wins + score.ties * 0.5) / Math.max(score.total, 1)).toFixed(2)}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Reveal and Voting UI */}
+                                    {(chatMessages.some(m => m.sender === 'bot') || benchmarkMessages.some(m => m.sender === 'bot')) && !isSending && (
+                                        <div style={{ padding: '20px', background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.1)', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center' }}>
+                                            <span style={{ fontSize: '14px', color: '#a78bfa', fontWeight: 500 }}>Which response was better?</span>
+                                            <div style={{ display: 'flex', gap: '12px' }}>
+                                                <button
+                                                    onClick={() => handleArenaVote('left')}
+                                                    style={{ padding: '10px 20px', background: '#3b82f6', border: 'none', borderRadius: '8px', color: 'white', fontWeight: 'bold', cursor: 'pointer' }}
+                                                >
+                                                    👈 Left Wins
+                                                </button>
+                                                <button
+                                                    onClick={() => handleArenaVote('right')}
+                                                    style={{ padding: '10px 20px', background: '#8b5cf6', border: 'none', borderRadius: '8px', color: 'white', fontWeight: 'bold', cursor: 'pointer' }}
+                                                >
+                                                    Right Wins 👉
+                                                </button>
+                                                <button
+                                                    onClick={() => handleArenaVote('tie')}
+                                                    style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontWeight: 'bold', cursor: 'pointer' }}
+                                                >
+                                                    🤝 It's a Tie
+                                                </button>
+                                                <button
+                                                    onClick={() => handleArenaVote('followup')}
+                                                    style={{ padding: '10px 20px', background: 'transparent', border: '1px solid #10b981', borderRadius: '8px', color: '#10b981', fontWeight: 'bold', cursor: 'pointer' }}
+                                                >
+                                                    💬 Follow-up
+                                                </button>
+                                            </div>
+
+                                            {arenaRevealed && arenaCurrentPair && (
+                                                <div style={{ marginTop: '10px', padding: '10px 20px', background: 'rgba(0,0,0,0.4)', borderRadius: '8px', display: 'flex', gap: '32px' }}>
+                                                    <div><span style={{ color: '#60a5fa', fontWeight: 'bold' }}>Model A:</span> <span style={{ color: '#9ca3af' }}>{arenaCurrentPair[0].split('/').pop()}</span></div>
+                                                    <div><span style={{ color: '#a78bfa', fontWeight: 'bold' }}>Model B:</span> <span style={{ color: '#9ca3af' }}>{arenaCurrentPair[1].split('/').pop()}</span></div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Arena Dual Columns */}
+                                    <div style={{ display: 'flex', gap: '24px', flex: 1 }}>
+                                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', borderRight: '1px solid rgba(255,255,255,0.05)', paddingRight: '12px' }}>
+                                            <div style={{ textAlign: 'center', padding: '10px', background: 'rgba(59,130,246,0.1)', borderRadius: '8px' }}>
+                                                <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#60a5fa' }}>Model A</span>
+                                            </div>
+                                            {chatMessages.map((msg, idx) => (
+                                                <MessageItem
+                                                    key={msg.id || idx} msg={msg} idx={idx} isSecondary={false}
+                                                    editingIndex={editingIndex} editText={editText} setEditText={setEditText}
+                                                    handleEditSave={handleEditSave} handleEditStart={handleEditStart}
+                                                    handleDeleteMessage={handleDeleteMessage} setEditingIndex={setEditingIndex}
+                                                    streamMetrics={streamMetrics} infShowMetrics={infShowMetrics}
+                                                    isLast={idx === chatMessages.length - 1}
+                                                />
+                                            ))}
+                                        </div>
+                                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                            <div style={{ textAlign: 'center', padding: '10px', background: 'rgba(167,139,250,0.1)', borderRadius: '8px' }}>
+                                                <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#a78bfa' }}>Model B</span>
+                                            </div>
+                                            {benchmarkMessages.map((msg, idx) => (
+                                                <MessageItem
+                                                    key={msg.id || idx} msg={msg} idx={idx} isSecondary={true}
+                                                    editingIndex={editingIndex} editText={editText} setEditText={setEditText}
+                                                    handleEditSave={handleEditSave} handleEditStart={handleEditStart}
+                                                    handleDeleteMessage={handleDeleteMessage} setEditingIndex={setEditingIndex}
+                                                    streamMetrics={benchmarkStreamMetrics} infShowMetrics={infShowMetrics}
+                                                    isLast={idx === benchmarkMessages.length - 1}
+                                                />
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Standard Chat: Single Column */}
+                            {evaluationMode === 'off' && (
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                    {chatMessages.map((msg, idx) => (
+                                        <MessageItem
+                                            key={msg.id || idx} msg={msg} idx={idx} isSecondary={false}
+                                            editingIndex={editingIndex} editText={editText} setEditText={setEditText}
+                                            handleEditSave={handleEditSave} handleEditStart={handleEditStart}
+                                            handleDeleteMessage={handleDeleteMessage} setEditingIndex={setEditingIndex}
+                                            streamMetrics={streamMetrics} infShowMetrics={infShowMetrics}
+                                            isLast={idx === chatMessages.length - 1}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                            <div ref={messagesEndRef} />
+                        </div>
+
+                        {/* Input Area (Floating Capsule) */}
+                        <div style={{
+                            padding: '0 40px 40px 40px',
+                            display: 'flex',
+                            justifyContent: 'center',
+                            pointerEvents: 'none',
+                            position: 'absolute', // Fixed at bottom
+                            bottom: 0,
+                            left: 0,
+                            right: 0,
+                            zIndex: 20
+                        }}>
+                            <div style={{
+                                width: '100%',
+                                maxWidth: '850px',
+                                background: '#2d2d2d', // Dark grey capsule
+                                borderRadius: '24px',
+                                border: '1px solid rgba(255,255,255,0.08)',
+                                boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                position: 'relative',
+                                pointerEvents: 'auto',
+                                padding: '8px'
+                            }}>
+                                {/* Processing / Status Overlay if needed, or just wiggle inside */}
+                                {isPromptProcessing && (
+                                    <div style={{ position: 'absolute', top: '-30px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.6)', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', color: '#a78bfa', backdropFilter: 'blur(4px)' }}>
+                                        Processing {promptProgress ? `${promptProgress}%` : '...'}
+                                    </div>
                                 )}
-                                <Button
-                                    variant="primary"
-                                    onClick={() => handleSendMessage()}
-                                    disabled={infServerStatus !== 'ready' || isSending || !inputMessage.trim()}
-                                    isLoading={isSending}
-                                    style={{ padding: '14px 20px', borderRadius: '12px' }}
-                                >
-                                    <Send size={18} />
-                                </Button>
+
+                                {/* Top: Text Area */}
+                                <textarea
+                                    ref={textareaRef}
+                                    value={inputMessage}
+                                    onChange={(e) => {
+                                        setInputMessage(e.target.value);
+                                        e.target.style.height = 'auto';
+                                        e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px';
+                                    }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            handleSendMessage();
+                                        }
+                                    }}
+                                    placeholder={infServerStatus === 'ready' ? "Ask anything..." : "Load a model to chat"}
+                                    rows={1}
+                                    disabled={infServerStatus !== 'ready' || isSending}
+                                    style={{
+                                        width: '100%',
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: '#fff',
+                                        fontSize: '16px',
+                                        padding: '12px 16px',
+                                        outline: 'none',
+                                        resize: 'none',
+                                        minHeight: '44px',
+                                        maxHeight: '150px',
+                                        lineHeight: '1.5',
+                                        borderRadius: '16px'
+                                    }}
+                                />
+
+                                {/* Bottom: Tools & Send */}
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px' }}>
+
+                                    {/* Left: Attachments & Tools */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <div style={{ position: 'relative' }}>
+                                            <button
+                                                onClick={() => setShowToolsDropup(!showToolsDropup)}
+                                                style={{
+                                                    background: showToolsDropup ? 'rgba(167,139,250,0.2)' : 'transparent',
+                                                    border: 'none', color: showToolsDropup ? '#a78bfa' : '#9ca3af',
+                                                    cursor: 'pointer', padding: '8px', borderRadius: '50%', transition: 'all 0.2s'
+                                                }}
+                                                className="icon-btn"
+                                            >
+                                                <PlusCircle size={20} />
+                                            </button>
+
+                                            {showToolsDropup && (
+                                                <div style={{
+                                                    position: 'absolute', bottom: '100%', left: '0', marginBottom: '12px',
+                                                    background: 'rgba(18, 18, 22, 0.95)', border: '1px solid rgba(255,255,255,0.1)',
+                                                    borderRadius: '12px', padding: '8px', display: 'flex', flexDirection: 'column', gap: '4px',
+                                                    boxShadow: '0 10px 25px -5px rgba(0,0,0,0.5)', backdropFilter: 'blur(12px)',
+                                                    minWidth: '220px', zIndex: 1000
+                                                }}>
+                                                    <div style={{ padding: '8px 12px', fontSize: '10px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Capabilities</div>
+
+                                                    <button
+                                                        onClick={() => { setInfEnableWebSearch(!infEnableWebSearch); setShowToolsDropup(false); }}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', background: infEnableWebSearch ? 'rgba(59,130,246,0.1)' : 'transparent', border: 'none', borderRadius: '6px', color: infEnableWebSearch ? '#60a5fa' : '#9ca3af', cursor: 'pointer', textAlign: 'left' }}
+                                                    >
+                                                        <Search size={16} /> <span style={{ fontSize: '13px' }}>Web Search</span>
+                                                    </button>
+
+                                                    <button
+                                                        onClick={() => { setInfEnableCodeExec(!infEnableCodeExec); setShowToolsDropup(false); }}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', background: infEnableCodeExec ? 'rgba(34,197,94,0.1)' : 'transparent', border: 'none', borderRadius: '6px', color: infEnableCodeExec ? '#4ade80' : '#9ca3af', cursor: 'pointer', textAlign: 'left' }}
+                                                    >
+                                                        <Code size={16} /> <span style={{ fontSize: '13px' }}>Code Execution</span>
+                                                    </button>
+
+                                                    <button
+                                                        onClick={() => { setInfEnableCanvas(!infEnableCanvas); setShowToolsDropup(false); }}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', background: infEnableCanvas ? 'rgba(167,139,250,0.1)' : 'transparent', border: 'none', borderRadius: '6px', color: infEnableCanvas ? '#a78bfa' : '#9ca3af', cursor: 'pointer', textAlign: 'left' }}
+                                                    >
+                                                        <PenTool size={16} /> <span style={{ fontSize: '13px' }}>Artifacts Canvas</span>
+                                                    </button>
+
+                                                    <div style={{ height: '1px', background: 'rgba(255,255,255,0.05)', margin: '4px 0' }} />
+
+                                                    <button
+                                                        onClick={() => { fileInputRef.current?.click(); setShowToolsDropup(false); }}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', background: 'transparent', border: 'none', borderRadius: '6px', color: '#9ca3af', cursor: 'pointer', textAlign: 'left' }}
+                                                    >
+                                                        <Paperclip size={16} /> <span style={{ fontSize: '13px' }}>Attach Vision</span>
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleFileSelect} />
+
+                                        {/* Clear Chat */}
+                                        {chatMessages.length > 0 && (
+                                            <button
+                                                onClick={handleClearConversation}
+                                                style={{ background: 'transparent', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: '8px', borderRadius: '50%', transition: 'background 0.2s' }}
+                                                className="icon-btn"
+                                            >
+                                                <RotateCcw size={20} />
+                                            </button>
+                                        )}
+
+                                        {/* Image Preview */}
+                                        {pendingImage && (
+                                            <div style={{ position: 'relative', width: '32px', height: '32px', borderRadius: '4px', overflow: 'hidden', marginLeft: '4px' }}>
+                                                <img src={pendingImage} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                <div
+                                                    onClick={handleRemoveImage}
+                                                    style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0 }}
+                                                    className="img-hover"
+                                                >
+                                                    <X size={12} color="#fff" />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Right: Send / Stop */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <div style={{ fontSize: '12px', color: '#666', marginRight: '8px' }}>
+                                            {inputMessage.length} / {contextSize}
+                                        </div>
+                                        <button
+                                            onClick={isSending ? handleStopGeneration : () => handleSendMessage()}
+                                            disabled={!isSending && !inputMessage.trim() && !pendingImage}
+                                            style={{
+                                                width: '36px', height: '36px',
+                                                borderRadius: '50%',
+                                                background: isSending ? 'rgba(239, 68, 68, 0.2)' : (inputMessage.trim() || pendingImage ? '#fff' : '#4b5563'),
+                                                border: isSending ? '1px solid rgba(239, 68, 68, 0.5)' : 'none',
+                                                color: isSending ? '#ef4444' : (inputMessage.trim() || pendingImage ? '#000' : '#9ca3af'),
+                                                cursor: (inputMessage.trim() || pendingImage || isSending) ? 'pointer' : 'default',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                                            }}
+                                        >
+                                            {isSending ? (
+                                                <div style={{ width: '12px', height: '12px', borderRadius: '2px', background: '#ef4444' }} />
+                                            ) : <ArrowUp size={20} strokeWidth={3} />}
+                                        </button>
+                                    </div>
+
+                                </div>
                             </div>
                         </div>
+                        <style>{`
+                            .icon-btn:hover { background: rgba(255,255,255,0.1) !important; color: white !important; }
+                        `}</style>
                     </div>
 
                     {/* 2. Canvas Column (Middle) */}
@@ -1291,12 +1928,13 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             <div style={{
                                 width: settingsWidth,
                                 minWidth: '250px',
-                                borderLeft: '1px solid rgba(255,255,255,0.08)',
-                                background: 'rgba(20,20,28,0.6)',
+                                borderLeft: '1px solid var(--border-subtle, rgba(255,255,255,0.05))',
+                                background: 'var(--bg-surface, #121216)',
                                 display: 'flex',
                                 flexDirection: 'column',
                                 overflowY: 'auto',
-                                flexShrink: 0
+                                flexShrink: 0,
+                                boxShadow: 'inset 2px 0 8px rgba(0,0,0,0.15)'
                             }}>
                                 {/* Parameters Section */}
                                 <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
@@ -1349,7 +1987,6 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                 type="number"
                                                 value={contextSize}
                                                 onChange={(e) => setContextSize(Number(e.target.value))}
-                                                tooltip="The maximum number of tokens the model can remember (Context Window)."
                                             />
                                         </>
                                     )}
@@ -1367,25 +2004,39 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                         </button>
 
                                         {showAdvanced && (
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                    <input type="checkbox" checked={infAutoFit} onChange={(e) => setInfAutoFit(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
-                                                    <Cpu size={14} /> <span style={{ fontSize: '13px' }}>Auto-Fit Memory (--fit)</span>
-                                                </label>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                                                <div
+                                                    className={`selection-card ${infFlashAttn ? 'selected' : ''}`}
+                                                    onClick={() => setInfFlashAttn(!infFlashAttn)}
+                                                >
+                                                    <div className="selection-indicator">
+                                                        <Zap size={14} />
+                                                    </div>
+                                                    <span style={{ fontSize: '13px' }}>Flash Attention</span>
+                                                </div>
 
-                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                    <input type="checkbox" checked={infFlashAttn} onChange={(e) => setInfFlashAttn(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
-                                                    <Zap size={14} /> <span style={{ fontSize: '13px' }}>Flash Attention</span>
-                                                </label>
+                                                <div
+                                                    className={`selection-card ${infNoMmap ? 'selected' : ''}`}
+                                                    onClick={() => setInfNoMmap(!infNoMmap)}
+                                                >
+                                                    <div className="selection-indicator">
+                                                        <HardDrive size={14} />
+                                                    </div>
+                                                    <span style={{ fontSize: '13px' }}>No Memory Map</span>
+                                                </div>
 
-                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                    <input type="checkbox" checked={infNoMmap} onChange={(e) => setInfNoMmap(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
-                                                    <HardDrive size={14} /> <span style={{ fontSize: '13px' }}>No Memory Map</span>
-                                                </label>
-
-                                                <div style={{ opacity: infAutoFit ? 0.5 : 1, pointerEvents: infAutoFit ? 'none' : 'auto' }}>
+                                                <div>
                                                     <label style={{ fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                                                         <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Layers size={14} /> GPU Layers</span>
+                                                        {/*
+                                                            // Send result back to LLM
+                                                            const nextMessage = `Tool result for ${toolName}:\n${resultMsg}\n\nPlease parse this result and answer the user's original request.`;
+                                                            // Note: We need to trigger this securely. For now, it might be safer to let the user click "continue" or
+                                                            // implement a robust queue. The global listener in AppContext handles tool recursion now.
+                                                            // But since we removed the listener here, this block is actually dead code (removed in previous step).
+                                                            // Wait, the previous step removed the listener, but did we also remove the 'handleSendMessage' that sets isSending?
+                                                            // Yes, we need to map isSendingGlobal to the specific UI elements.
+                                                        */}
                                                         <span style={{ color: '#a78bfa' }}>{infGpuLayers >= maxGpuLayers ? 'Max' : infGpuLayers} / {maxGpuLayers}</span>
                                                     </label>
                                                     <input
@@ -1432,47 +2083,112 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                     </button>
 
                                     {showTools && (
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                <input type="checkbox" checked={infShowMetrics} onChange={(e) => setInfShowMetrics(e.target.checked)} style={{ accentColor: '#10b981' }} />
-                                                <Activity size={14} style={{ color: '#10b981' }} /> <span style={{ fontSize: '13px' }}>Show Metrics</span>
-                                            </label>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                                            <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Comparison & Testing</p>
 
-                                            <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px', marginTop: '4px' }}>
-                                                <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agentic Tools</p>
-
-                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '10px' }}>
-                                                    <input type="checkbox" checked={infEnableWebSearch} onChange={(e) => setInfEnableWebSearch(e.target.checked)} style={{ accentColor: '#3b82f6' }} />
-                                                    <Search size={14} style={{ color: '#3b82f6' }} /> <span style={{ fontSize: '13px' }}>Web Search</span>
-                                                </label>
-
-                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                    <input type="checkbox" checked={infEnableCodeExec} onChange={(e) => setInfEnableCodeExec(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
-                                                    <Code size={14} style={{ color: '#f59e0b' }} /> <span style={{ fontSize: '13px' }}>Code Execution</span>
-                                                </label>
-
-                                                <button
-                                                    onClick={() => setShowToolCreator(true)}
-                                                    style={{
-                                                        marginTop: '8px', padding: '8px',
-                                                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                                                        borderRadius: '8px', color: '#9ca3af', fontSize: '12px',
-                                                        cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center',
-                                                        width: '100%'
-                                                    }}
-                                                >
-                                                    <Settings2 size={12} /> Create Custom Tool
-                                                </button>
+                                            <div
+                                                className={`selection-card ${evaluationMode === 'compare' ? 'selected' : ''}`}
+                                                onClick={() => setEvaluationMode(evaluationMode === 'compare' ? 'off' : 'compare')}
+                                            >
+                                                <div className="selection-indicator">
+                                                    <BarChart2 size={14} />
+                                                </div>
+                                                <span style={{ fontSize: '13px' }}>Benchmarking Mode</span>
                                             </div>
 
-                                            <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '12px', marginTop: '4px' }}>
-                                                <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Display</p>
-
-                                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                                                    <input type="checkbox" checked={infEnableCanvas} onChange={(e) => setInfEnableCanvas(e.target.checked)} style={{ accentColor: '#8b5cf6' }} />
-                                                    <PenTool size={14} style={{ color: '#8b5cf6' }} /> <span style={{ fontSize: '13px' }}>Canvas Mode</span>
-                                                </label>
+                                            <div
+                                                className={`selection-card ${evaluationMode === 'arena' ? 'selected' : ''} ${evaluationMode === 'off' ? 'disabled' : ''}`}
+                                                onClick={() => evaluationMode !== 'off' && setEvaluationMode(evaluationMode === 'arena' ? 'compare' : 'arena')}
+                                                style={{ opacity: evaluationMode !== 'off' ? 1 : 0.5, cursor: evaluationMode !== 'off' ? 'pointer' : 'not-allowed' }}
+                                            >
+                                                <div className="selection-indicator">
+                                                    <Search size={14} />
+                                                </div>
+                                                <span style={{ fontSize: '13px' }}>Blind Testing</span>
                                             </div>
+
+                                            {isBenchmarking && (
+                                                <div style={{ padding: '4px 8px 8px' }}>
+                                                    <Select
+                                                        label="Benchmark Against"
+                                                        options={[
+                                                            { value: '', label: 'None' },
+                                                            ...modelOptions.map(opt => ({ value: opt.value, label: opt.label }))
+                                                        ]}
+                                                        value={selectedBenchmarkModel}
+                                                        onChange={(val) => {
+                                                            setSelectedBenchmarkModel(val);
+                                                            // Auto-start if benchmarking is active?
+                                                            // Maybe logic elsewhere handles it, or user must restart server. 
+                                                            // For now, let's keep it manual start via huge "START" button or restart.
+                                                        }}
+                                                    />
+                                                    <div style={{ marginTop: '8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <span style={{
+                                                            width: '8px', height: '8px', borderRadius: '50%',
+                                                            background: secondaryBenchStatus === 'ready' ? '#4ade80' : secondaryBenchStatus === 'loading' ? '#fbbf24' : '#ef4444'
+                                                        }} />
+                                                        <span style={{ color: '#9ca3af' }}>
+                                                            {secondaryBenchStatus === 'idle' ? 'Secondary Idle' :
+                                                                secondaryBenchStatus === 'loading' ? 'Starting...' :
+                                                                    secondaryBenchStatus === 'ready' ? 'Ready (Port 8081)' : 'Error'}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            <div style={{ borderTop: '1px solid var(--border-subtle)', margin: 'var(--space-2) 0' }} />
+
+                                            <div
+                                                className={`selection-card ${infShowMetrics ? 'selected' : ''}`}
+                                                onClick={() => setInfShowMetrics(!infShowMetrics)}
+                                            >
+                                                <div className="selection-indicator" style={{ color: 'var(--accent-green)' }}>
+                                                    <Activity size={14} />
+                                                </div>
+                                                <span style={{ fontSize: '13px' }}>Show Performance Metrics</span>
+                                            </div>
+
+                                            <div style={{ borderTop: '1px solid var(--border-subtle)', margin: 'var(--space-2) 0' }} />
+                                            <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agentic Tools</p>
+
+                                            <div
+                                                className={`selection-card ${infEnableWebSearch ? 'selected' : ''}`}
+                                                onClick={() => setInfEnableWebSearch(!infEnableWebSearch)}
+                                            >
+                                                <div className="selection-indicator" style={{ color: 'var(--accent-blue)' }}>
+                                                    <Search size={14} />
+                                                </div>
+                                                <span style={{ fontSize: '13px' }}>Enhanced Web Search</span>
+                                            </div>
+
+                                            <div
+                                                className={`selection-card ${infEnableCodeExec ? 'selected' : ''}`}
+                                                onClick={() => setInfEnableCodeExec(!infEnableCodeExec)}
+                                            >
+                                                <div className="selection-indicator" style={{ color: 'var(--accent-yellow)' }}>
+                                                    <Code size={14} />
+                                                </div>
+                                                <span style={{ fontSize: '13px' }}>Local Code Execution</span>
+                                            </div>
+
+                                            <div
+                                                className={`selection-card ${infEnableCanvas ? 'selected' : ''}`}
+                                                onClick={() => setInfEnableCanvas(!infEnableCanvas)}
+                                            >
+                                                <div className="selection-indicator" style={{ color: 'var(--accent-primary)' }}>
+                                                    <PenTool size={14} />
+                                                </div>
+                                                <span style={{ fontSize: '13px' }}>DeepMind Canvas Mode</span>
+                                            </div>
+
+                                            <button
+                                                onClick={() => setShowToolCreator(true)}
+                                                className="btn btn-secondary"
+                                                style={{ marginTop: 'var(--space-2)', width: '100%' }}
+                                            >
+                                                <Settings2 size={12} /> Create Custom Tool
+                                            </button>
                                         </div>
                                     )}
                                 </div>
@@ -1486,6 +2202,26 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                         >
                                             <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}><Terminal size={14} /> Command Preview</span>
                                             <ChevronDown size={16} style={{ transform: showCommandPreview ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                                        </button>
+                                        <button
+                                            onClick={() => setEvaluationMode(evaluationMode === 'off' ? 'compare' : 'off')}
+                                            style={{
+                                                padding: '8px 14px',
+                                                background: evaluationMode !== 'off' ? 'rgba(167, 139, 250, 0.1)' : 'rgba(255,255,255,0.05)',
+                                                border: evaluationMode !== 'off' ? '1px solid rgba(167, 139, 250, 0.3)' : '1px solid rgba(255,255,255,0.1)',
+                                                borderRadius: '8px',
+                                                color: evaluationMode !== 'off' ? '#a78bfa' : '#9ca3af',
+                                                fontSize: '12px',
+                                                fontWeight: 600,
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '8px',
+                                                transition: 'all 0.2s'
+                                            }}
+                                        >
+                                            <BarChart2 size={14} />
+                                            {evaluationMode === 'off' ? 'Evaluation: Off' : evaluationMode === 'compare' ? 'Evaluation: Compare' : 'Evaluation: Arena'}
                                         </button>
 
                                         {showCommandPreview && (
@@ -1517,7 +2253,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                     onSaveSuccess={() => addLogMessage('Custom tool created successfully')}
                 />
             </div>
-        </div>
+        </div >
     );
 };
 

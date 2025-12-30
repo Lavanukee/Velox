@@ -141,7 +141,10 @@ async def chat_completions(request: Request):
         
         def stream_generator():
             try:
+                print(f"DEBUG: Starting stream generator")
                 for new_text in streamer:
+                    # DEBUG: Print generated text to catch 'None'
+                    print(f"DEBUG: Generated text: '{new_text}'")
                     chunk = {
                         "id": f"chatcmpl-{int(time.time())}",
                         "object": "chat.completion.chunk",
@@ -162,6 +165,11 @@ async def chat_completions(request: Request):
             outputs = model.generate(**generate_kwargs)
         
         response_text = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+        # CRITICAL FIX: Ensure we never return the string "None" to the frontend
+        if response_text is None or response_text == "None":
+            response_text = ""
+        
+        print(f"DEBUG: Generated full text: '{response_text}'")
         
         return {
             "id": f"chatcmpl-{int(time.time())}",
@@ -185,13 +193,28 @@ def load_model(model_path: str):
     print(f"Loading model from {model_path} on {device}...")
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
+        
+        # Fix: Ensure pad_token is set to avoid CUDA errors when pad_token == eos_token
+        if tokenizer.pad_token is None or tokenizer.pad_token == tokenizer.eos_token:
+            # Try to use a dedicated pad token, or add one if necessary
+            if hasattr(tokenizer, 'add_special_tokens'):
+                # For models without a pad token, use eos_token but set padding_side
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.padding_side = "left"  # Prevents attention mask issues
+            print(f"Set pad_token to: {tokenizer.pad_token}")
+        
         model = AutoModelForCausalLM.from_pretrained(
             model_path, 
             device_map="auto", 
-            dtype=torch.float16 if device == "cuda" else torch.float32,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
             local_files_only=True,
             trust_remote_code=True
         )
+        
+        # Ensure model config matches tokenizer
+        if hasattr(model.config, 'pad_token_id') and model.config.pad_token_id is None:
+            model.config.pad_token_id = tokenizer.pad_token_id
+            
         print("Model loaded successfully.")
     except Exception as e:
         print(f"Error loading model: {e}")

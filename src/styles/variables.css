@@ -1,37 +1,212 @@
-/* Base Colors with Purple-Aqua Gradients */
+/* ============================================
+   VELOX DESIGN SYSTEM - CSS VARIABLES
+   ============================================
+   
+   This file establishes the visual language for depth,
+   layering, and consistency across the application.
+   
+   Based on modern UI principles:
+   - Luminance-based background hierarchy
+   - 3-level shadow elevation system
+   - Realistic 3D effects with top-highlight/bottom-shadow
+   - Consistent spacing and radius tokens
+============================================ */
+
 :root {
-  /* Gradient backgrounds - subtle purple to aqua blue */
-  --bg-app: linear-gradient(135deg, #0a0a0f 0%, #0d0a12 25%, #0a0d12 50%, #0a1012 100%);
-  --bg-panel: linear-gradient(135deg, rgba(18, 18, 22, 0.95) 0%, rgba(20, 18, 24, 0.95) 50%, rgba(18, 20, 24, 0.95) 100%);
-  --bg-card: linear-gradient(135deg, rgba(28, 28, 36, 0.6) 0%, rgba(30, 28, 38, 0.6) 50%, rgba(28, 30, 38, 0.6) 100%);
-  --bg-input: linear-gradient(135deg, rgba(24, 24, 32, 0.8) 0%, rgba(26, 24, 34, 0.8) 100%);
+  /* === LAYERED BACKGROUNDS (Luminance Hierarchy) ===
+     Dark mode relies heavily on background lightness levels
+     to create visual hierarchy and depth perception.
+  */
+  --bg-app: #09090b;
+  /* Deepest - main canvas/body */
+  --bg-surface: #121216;
+  /* Middle - cards, panels, sidebar */
+  --bg-elevated: #1a1a22;
+  /* Higher - dropdowns, popovers, active states */
+  --bg-highlight: #222230;
+  /* Highest - emphasized elements, hover states */
 
-  /* Accent gradients with purple-aqua theme */
-  --accent-gradient: linear-gradient(135deg, #a78bfa 0%, #7dd3fc 100%);
-  --accent-gradient-hover: linear-gradient(135deg, #c4b5fd 0%, #93c5fd 100%);
+  /* Subtle variations for micro-adjustments */
+  --bg-input: #0d0d10;
+  /* Recessed inputs (darker than surface) */
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+  /* Modal/toast overlays */
 
-  /* Solid accent colors */
-  --accent-primary: #a78bfa;
-  --accent-secondary: #7dd3fc;
-  --accent-blue: #3b82f6;
-  --accent-purple: #8b5cf6;
-  --accent-green: #10b981;
-  --accent-red: #ef4444;
+  /* === SHADOWS (Elevation Levels) ===
+     Level 0: Flat (no shadow)
+     Level 1: Small - buttons, small cards
+     Level 2: Medium - dropdowns, active states  
+     Level 3: Large - modals, floating elements
+  */
+  --shadow-none: none;
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.12),
+    0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.18),
+    0 2px 4px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.30),
+    0 8px 16px rgba(0, 0, 0, 0.20);
 
-  /* Text colors */
+  /* === REALISTIC 3D EFFECTS ===
+     Combine top highlight + bottom shadow for tactile depth
+  */
+  --shadow-3d: inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+  --shadow-3d-sm: inset 0 1px 0 rgba(255, 255, 255, 0.02),
+    0 2px 6px rgba(0, 0, 0, 0.1);
+
+  /* Inset/recessed effect - "carved out" look for inputs, tracks */
+  --shadow-inset: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+  --shadow-inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.15);
+
+  /* Glow effects for focus states */
+  --shadow-glow-primary: 0 0 0 3px rgba(139, 92, 246, 0.15);
+  --shadow-glow-blue: 0 0 0 3px rgba(59, 130, 246, 0.15);
+
+  /* === BORDER RADII (Consistent Across Components) ===
+     Use these tokens for all rounded corners to maintain visual harmony
+  */
+  --radius-xs: 4px;
+  /* Small chips, tags */
+  --radius-sm: 8px;
+  /* Buttons, inputs */
+  --radius-md: 12px;
+  /* Cards, panels */
+  --radius-lg: 16px;
+  /* Larger cards, modals */
+  --radius-xl: 20px;
+  /* Hero sections, large containers */
+  --radius-full: 9999px;
+  /* Pills, avatars, toggles */
+
+  /* === SPACING SCALE ===
+     Consistent spacing based on 4px grid
+  */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* === TRANSITIONS ===
+     Consistent animation timing for smooth interactions
+  */
+  --transition-fast: 0.1s ease;
+  --transition-base: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* === TYPOGRAPHY COLORS === */
   --text-main: #e4e4e7;
+  /* Primary text */
+  --text-secondary: #a1a1aa;
+  /* Muted/secondary text */
+  --text-dim: #71717a;
+  /* Disabled/placeholder text */
+  --text-inverse: #09090b;
+  /* Text on light backgrounds */
+
+  /* === ACCENT COLORS === */
+  --accent-primary: #8b5cf6;
+  /* Purple - main brand */
+  --accent-primary-hover: #a78bfa;
+  /* Purple light */
+  --accent-primary-muted: rgba(139, 92, 246, 0.15);
+
+  --accent-blue: #3b82f6;
+  --accent-blue-hover: #60a5fa;
+  --accent-blue-muted: rgba(59, 130, 246, 0.15);
+
+  --accent-green: #10b981;
+  --accent-green-hover: #34d399;
+  --accent-green-muted: rgba(16, 185, 129, 0.15);
+
+  --accent-yellow: #eab308;
+  --accent-yellow-hover: #facc15;
+  --accent-yellow-muted: rgba(234, 179, 8, 0.15);
+
+  --accent-red: #ef4444;
+  --accent-red-hover: #f87171;
+  --accent-red-muted: rgba(239, 68, 68, 0.15);
+
+  /* === BORDER COLORS === */
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-default: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --border-accent: rgba(139, 92, 246, 0.30);
+
+  /* === GRADIENTS === */
+  --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  --gradient-surface: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-surface) 100%);
+
+  /* === COMPONENT-SPECIFIC (Legacy support) === */
+  --sidebar-width: 260px;
+  --sidebar-collapsed-width: 72px;
+
+  /* === SPLASH SCREEN / THEME COMPATIBILITY ===
+       These variables are used by SplashOverlay and ThemeBackground
+    */
+  --accent-secondary: #eab308;
+  --accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #3b82f6 50%, #eab308 100%);
   --text-muted: #a1a1aa;
 
-  /* Borders with subtle glow */
-  --border-color: rgba(139, 92, 246, 0.1);
-  --border-glow: rgba(139, 92, 246, 0.2);
+  /* === GRADIENT BACKGROUNDS (Subtle light source simulation) === */
+  --gradient-card: linear-gradient(180deg, rgba(255, 255, 255, 0.01) 0%, transparent 100%);
+  --gradient-sidebar: linear-gradient(180deg, #121216 0%, #09090b 100%);
+}
 
-  /* Glass effect */
-  --glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
-  --glass-border: rgba(255, 255, 255, 0.1);
+/* ============================================
+   LIGHT MODE THEME
+   ============================================
+   Applied via data-color-mode="light" attribute on html
+*/
+[data-color-mode="light"] {
+  /* Softer background hierarchy - warm grays to avoid eye strain */
+  --bg-app: #f5f5f7;
+  --bg-surface: #ffffff;
+  --bg-elevated: #fafafa;
+  --bg-highlight: #f0f0f2;
+  --bg-input: #fafafa;
+  --bg-overlay: rgba(0, 0, 0, 0.45);
 
-  /* Radii */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  /* Typography - warmer dark grays */
+  --text-main: #1c1c1e;
+  --text-secondary: #636366;
+  --text-dim: #8e8e93;
+  --text-muted: #aeaeb2;
+  --text-inverse: #ffffff;
+
+  /* Shadows - subtle, warmer tinted */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08),
+    0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 16px 32px rgba(0, 0, 0, 0.12),
+    0 8px 16px rgba(0, 0, 0, 0.06);
+  --shadow-3d: 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-3d-sm: 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 1px 4px rgba(0, 0, 0, 0.06);
+  --shadow-inset: inset 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.03);
+
+  /* Border colors - subtle and warm */
+  --border-subtle: rgba(0, 0, 0, 0.04);
+  --border-default: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.12);
+
+  /* Accent muted - slightly higher opacity for light backgrounds */
+  --accent-primary-muted: rgba(139, 92, 246, 0.08);
+  --accent-blue-muted: rgba(59, 130, 246, 0.08);
+  --accent-green-muted: rgba(16, 185, 129, 0.08);
+  --accent-yellow-muted: rgba(234, 179, 8, 0.10);
+  --accent-red-muted: rgba(239, 68, 68, 0.08);
+
+  /* Support for gradients in light mode */
+  --gradient-card: linear-gradient(180deg, rgba(255, 255, 255, 1) 0%, rgba(250, 250, 252, 1) 100%);
+  --gradient-sidebar: linear-gradient(135deg, #fafafa 0%, #f5f5f7 100%);
 }

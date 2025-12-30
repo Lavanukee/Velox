@@ -1,6 +1,7 @@
-use crate::constants::{PYTHON_DIR, PYTHON_EXE, SCRIPTS_DIR};
+use crate::constants::{PYTHON_DIR, PYTHON_EXE};
 use log::{debug, error};
 use std::path::PathBuf;
+#[allow(unused_imports)]
 use tauri::Manager;
 use tokio::process::Child;
 use tokio::sync::Mutex;
@@ -8,6 +9,7 @@ use tokio::sync::Mutex;
 pub struct PythonProcessState {
     pub data_collector_child: Mutex<Option<Child>>,
     pub llama_server_child: Mutex<Option<Child>>,
+    pub llama_secondary_child: Mutex<Option<Child>>, // Added for Blind Testing / Comparison
     pub transformers_child: Mutex<Option<Child>>,
     pub tensorboard_child: Mutex<Option<Child>>,
     pub tensorboard_port: Mutex<Option<u16>>,
@@ -18,6 +20,7 @@ impl Default for PythonProcessState {
         PythonProcessState {
             data_collector_child: Mutex::new(None),
             llama_server_child: Mutex::new(None),
+            llama_secondary_child: Mutex::new(None),
             transformers_child: Mutex::new(None),
             tensorboard_child: Mutex::new(None),
             tensorboard_port: Mutex::new(None),
@@ -70,7 +73,7 @@ pub fn get_script_path(app_handle: &tauri::AppHandle, script_name: &str) -> Stri
         let _ = app_handle;
         // Dev: use source files directly
         let script_path = crate::utils::get_project_root()
-            .join(SCRIPTS_DIR)
+            .join(crate::constants::SCRIPTS_DIR)
             .join(script_name);
         return script_path.to_string_lossy().to_string();
     }

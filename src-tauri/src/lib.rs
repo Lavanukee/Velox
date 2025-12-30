@@ -5,6 +5,8 @@ mod models;
 mod python;
 mod utils;
 
+pub use hardware::get_hardware_info_command;
+
 use commands::*;
 use models::ModelsState;
 use python::{get_python_command, LlamaChatContext, PythonProcessState};
@@ -136,6 +138,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_python_installed_command,
             check_llama_binary_command,
+            check_llama_binary_exists_command,
             download_llama_binary_command,
             check_server_health_command,
             execute_tool_command,
@@ -185,9 +188,45 @@ pub fn run() {
             save_hf_token_command,
             start_data_collector_command,
             get_tensorboard_url_command,
+            get_hardware_info_command,
             execute_tool_command,
-            save_custom_tool_command
+            save_custom_tool_command,
+            fix_dataset_command,
+            process_vlm_dataset_command
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                // Cleanup all child processes on exit
+                let python_state = app_handle.state::<Arc<PythonProcessState>>().clone();
+
+                // Block current thread to await cleanup
+                tauri::async_runtime::block_on(async {
+                    // Kill primary llama server
+                    if let Some(mut child) = python_state.llama_server_child.lock().await.take() {
+                        let _ = child.kill().await;
+                    }
+                    // Kill secondary llama server
+                    if let Some(mut child) = python_state.llama_secondary_child.lock().await.take()
+                    {
+                        let _ = child.kill().await;
+                    }
+                    // Kill transformers server
+                    if let Some(mut child) = python_state.transformers_child.lock().await.take() {
+                        let _ = child.kill().await;
+                    }
+                    // Kill data collector
+                    if let Some(mut child) = python_state.data_collector_child.lock().await.take() {
+                        let _ = child.kill().await;
+                    }
+                    // Kill TensorBoard
+                    if let Some(mut child) = python_state.tensorboard_child.lock().await.take() {
+                        let _ = child.kill().await;
+                    }
+                });
+
+                log::info!("All child processes cleaned up on exit.");
+            }
+        });
 }

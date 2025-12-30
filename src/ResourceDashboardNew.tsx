@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useApp } from './context/AppContext';
-import { DownloadTask } from './types';
+import { DownloadTask, Resource } from './types';
 import {
     Download,
     Trash2,
@@ -21,25 +20,14 @@ import {
     FileCode,
     Check,
     Square,
-    RefreshCw,
-    Plus
-
+    Plus,
+    Wrench,
+    Sparkles,
+    AlertTriangle
 } from 'lucide-react';
 import './styles/ResourceDashboard.css';
 
 // --- Types ---
-
-interface Resource {
-    name: string;
-    size: string;
-    path: string;
-    type: 'model' | 'gguf' | 'lora' | 'dataset';
-    quantization?: string;
-    is_mmproj?: boolean;
-    has_vision?: boolean;
-    is_processed?: boolean; // New: Checks if processed_data folder exists
-    dataset_format?: string; // New: Detected format (arrow, csv, json, parquet)
-}
 
 interface CheckpointInfo {
     name: string;
@@ -90,147 +78,114 @@ const formatBytes = (bytes: number | null): string => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
 
+const formatCount = (num: number | null | undefined): string => {
+    if (num === undefined || num === null) return '';
+    if (num < 1000) return num.toString();
+    if (num < 1000000) return (num / 1000).toFixed(1) + 'k';
+    return (num / 1000000).toFixed(1) + 'M';
+};
+
 // --- Component ---
 
 interface ResourceRowProps {
     resource: Resource;
-    isExpanded: boolean;
-    details: { local: Set<string>; remote: HFFile[] } | undefined;
     isSelected: boolean;
     toggleSelection: (path: string) => void;
     handleExpandResource: (r: Resource) => void;
     handleConvertDataset: (r: Resource) => void;
+    handleFixDataset: (r: Resource) => void;
     handleDelete: (r: Resource) => void;
-    handleDownloadSingleFile: (r: Resource, filename: string) => void;
     converting: boolean;
-    loadingExpansion: boolean;
+    fixing: boolean;
 }
 
 const ResourceRow: React.FC<ResourceRowProps> = ({
     resource: r,
-    isExpanded,
-    details,
     isSelected,
     toggleSelection,
     handleExpandResource,
     handleConvertDataset,
+    handleFixDataset,
     handleDelete,
-    handleDownloadSingleFile,
     converting,
-    loadingExpansion
+    fixing
 }) => {
-    // Merge file lists for display
-    const allFiles = useMemo(() => {
-        if (!details) return [];
-        const local = details.local;
-        const remote = details.remote;
-
-        // Map remote files
-        const merged = remote.map(f => ({
-            name: f.path,
-            size: f.size,
-            isLocal: local.has(f.path)
-        }));
-
-        // Add local-only files
-        local.forEach(f => {
-            if (!remote.find(rf => rf.path === f)) {
-                merged.push({ name: f, size: null, isLocal: true });
-            }
-        });
-
-        return merged.sort((a, b) => a.name.localeCompare(b.name));
-    }, [details]);
-
     return (
-        <div className="rd-item">
-            <div className="rd-item-header" onClick={() => handleExpandResource(r)}>
-                <div
-                    className={`rd-item-select ${isSelected ? 'selected' : ''}`}
-                    onClick={(e) => { e.stopPropagation(); toggleSelection(r.path); }}
-                >
-                    {isSelected ? <Check size={20} /> : <Square size={20} />}
-                </div>
+        <div className="rd-item" onClick={() => handleExpandResource(r)}>
+            <div
+                className={`rd-item-select ${isSelected ? 'selected' : ''}`}
+                onClick={(e) => { e.stopPropagation(); toggleSelection(r.path); }}
+            >
+                {isSelected ? <Check size={18} /> : <Square size={18} />}
+            </div>
 
-                <div className="rd-item-icon">
-                    {r.type === 'gguf' ? <Package size={22} /> :
-                        r.type === 'lora' ? <Layers size={22} /> :
-                            r.type === 'dataset' ? <Database size={22} /> : <Brain size={22} />}
-                </div>
+            <div className="rd-item-icon">
+                {r.type === 'gguf' ? <Package size={18} /> :
+                    r.type === 'lora' ? <Layers size={18} /> :
+                        r.type === 'dataset' ? <Database size={18} /> : <Brain size={18} />}
+            </div>
 
-                <div className="rd-item-details">
-                    <div className="rd-item-name" title={r.name}>{r.name}</div>
-                    <div className="rd-item-meta">
-                        <span>{r.size}</span>
-                        {r.quantization && <span className="rd-badge blue">{r.quantization}</span>}
-                        {r.is_mmproj && <span className="rd-badge purple">Vision</span>}
-                        {r.type === 'dataset' && (
-                            <>
-                                {r.dataset_format && <span className="rd-badge blue">{r.dataset_format.toUpperCase()}</span>}
-                                {r.is_processed ? (
-                                    <span className="rd-badge green flex items-center gap-1">
-                                        <Check size={10} /> Ready
-                                    </span>
-                                ) : (
-                                    <span className="rd-badge gray">Raw</span>
-                                )}
-                            </>
-                        )}
-                    </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-                    {r.type === 'dataset' && !r.is_processed && (
-                        <button
-                            className="rd-action-btn"
-                            title="Convert to Arrow"
-                            onClick={() => handleConvertDataset(r)}
-                            disabled={converting}
-                        >
-                            {converting ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                        </button>
+            <div className="rd-item-details">
+                <div className="rd-item-name" title={r.name}>{r.name}</div>
+                <div className="rd-item-meta">
+                    <span>{r.size}</span>
+                    {r.quantization && <span className="rd-badge blue">{r.quantization}</span>}
+                    {r.is_mmproj && <span className="rd-badge purple">Vision</span>}
+                    {r.type === 'dataset' && (
+                        <>
+                            {r.dataset_format && <span className="rd-badge blue">{r.dataset_format.toUpperCase()}</span>}
+                            {r.count !== undefined && <span className="rd-badge gray" title={`${r.count} examples`}>{formatCount(r.count)} examples</span>}
+                            {r.modalities?.map(m => (
+                                <span key={m} className={`rd-badge ${m === 'Vision' ? 'purple' : 'gray'}`}>{m}</span>
+                            ))}
+                            {r.is_processed && (
+                                <span className="rd-badge green">
+                                    <Check size={10} /> Ready
+                                </span>
+                            )}
+                            {r.format_error && (
+                                <span className="rd-badge red" title={r.format_error}>
+                                    <AlertTriangle size={10} /> Error
+                                </span>
+                            )}
+                        </>
                     )}
-                    <button onClick={() => handleDelete(r)} className="rd-delete-btn" title="Delete">
-                        <Trash2 size={18} />
-                    </button>
-                    {isExpanded ? <ChevronDown size={18} className="text-gray-400" /> : <ChevronRight size={18} className="text-gray-400" />}
                 </div>
             </div>
 
-            {/* Expanded File List */}
-            {isExpanded && (
-                <div className="rd-item-body">
-                    {loadingExpansion && !details ? (
-                        <div className="flex justify-center p-4"><Loader2 className="animate-spin text-gray-400" /></div>
-                    ) : (
-                        <div className="rd-file-list">
-                            {allFiles.length === 0 ? <div className="p-2 text-sm text-gray-500 italic">No files found.</div> :
-                                allFiles.map(f => (
-                                    <div key={f.name} className={`rd-file-item ${f.isLocal ? 'downloaded' : ''}`}>
-                                        <div className="flex flex-col overflow-hidden">
-                                            <span className="rd-file-name truncate" title={f.name}>{f.name}</span>
-                                            {f.size && <span className="text-xs text-gray-600">{formatBytes(f.size)}</span>}
-                                        </div>
-                                        <div className="rd-file-actions">
-                                            {f.isLocal ? (
-                                                <span className="rd-btn-icon check"><Check size={16} /></span>
-                                            ) : (
-                                                <button
-                                                    className="rd-btn-icon add"
-                                                    title="Download File"
-                                                    onClick={(e) => { e.stopPropagation(); handleDownloadSingleFile(r, f.name); }}
-                                                >
-                                                    <Plus size={16} />
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                        </div>
-                    )}
-                </div>
-            )}
+            {/* Actions */}
+            <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                {r.type === 'dataset' && !r.is_processed && (
+                    <>
+                        <button
+                            className="rd-action-btn warning"
+                            title="Fix Dataset (Repair JSONL)"
+                            onClick={() => handleFixDataset(r)}
+                            disabled={fixing}
+                        >
+                            {fixing ? <Loader2 size={14} className="animate-spin" /> : <Wrench size={14} />}
+                            <span>Repair</span>
+                        </button>
+                        <button
+                            className="rd-action-btn primary"
+                            title="Process/Convert Dataset"
+                            onClick={() => handleConvertDataset(r)}
+                            disabled={converting}
+                        >
+                            {converting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                            <span>Process</span>
+                        </button>
+                    </>
+                )}
+                <button
+                    onClick={() => handleDelete(r)}
+                    className="rd-delete-btn"
+                    title="Delete"
+                    style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '6px' }}
+                >
+                    <Trash2 size={16} />
+                </button>
+            </div>
         </div>
     );
 };
@@ -241,14 +196,16 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
     const {
         rdHfQuery: hfQuery, setRdHfQuery: setHfQuery,
         rdHfType: hfType, setRdHfType: setHfType,
-        rdSelectedPaths: selectedPaths, setRdSelectedPaths: setSelectedPaths
+        rdSelectedPaths: selectedPaths, setRdSelectedPaths: setSelectedPaths,
+        resources, loadResources, isConvertingMap, setConvertingMap
     } = useApp();
 
-    // --- State: Resources & Dashboard ---
-    const [resources, setResources] = useState<Resource[]>([]);
+    // Local processing states
+    const [fixingMap, setFixingMap] = useState<Record<string, boolean>>({});
+
+    // --- State: Dashboard & UI ---
     const [projectLoras, setProjectLoras] = useState<ProjectLoraInfo[]>([]);
     const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
-    const [convertingMap, setConvertingMap] = useState<Record<string, boolean>>({}); // Track conversion loading state
 
     const [sections, setSections] = useState({
         models: true,
@@ -261,6 +218,7 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
     // --- State: Find New / HF Search ---
     const [showFindNew, setShowFindNew] = useState(false);
     const [lastSearchedQuery, setLastSearchedQuery] = useState(''); // For debounce check
+    const [lastSearchedType, setLastSearchedType] = useState<'model' | 'dataset'>('model');
     const [hfResults, setHfResults] = useState<HFSearchResult[]>([]);
     const [isSearching, setIsSearching] = useState(false);
     const [hfToken, setHfToken] = useState('');
@@ -283,6 +241,32 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
     const [expandedFiles, setExpandedFiles] = useState<Record<string, { local: Set<string>, remote: HFFile[] }>>({});
     const [loadingExpansion, setLoadingExpansion] = useState(false);
 
+    const activeResource = useMemo(() => {
+        if (!expandedResourceId) return null;
+        return resources.find(r => r.path === expandedResourceId) || null;
+    }, [expandedResourceId, resources]);
+
+    const activeFiles = useMemo(() => {
+        if (!expandedResourceId || !expandedFiles[expandedResourceId]) return [];
+        const details = expandedFiles[expandedResourceId];
+        const local = details.local;
+        const remote = details.remote;
+
+        const merged = remote.map(f => ({
+            name: f.path,
+            size: f.size,
+            isLocal: local.has(f.path)
+        }));
+
+        local.forEach(f => {
+            if (!remote.find(rf => rf.path === f)) {
+                merged.push({ name: f, size: null, isLocal: true });
+            }
+        });
+
+        return merged.sort((a, b) => a.name.localeCompare(b.name));
+    }, [expandedResourceId, expandedFiles]);
+
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (importRef.current && !importRef.current.contains(event.target as Node)) {
@@ -295,41 +279,31 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
 
     // --- Initialization ---
     useEffect(() => {
-        loadResources();
         loadToken();
-
-        const unlistenModel = listen('model_downloaded', () => loadResources());
-        const unlistenDataset = listen('dataset_downloaded', () => loadResources());
-
-        return () => {
-            unlistenModel.then(f => f());
-            unlistenDataset.then(f => f());
+        const fetchProjectLoras = async () => {
+            try {
+                const projects: ProjectLoraInfo[] = await invoke('list_loras_by_project_command');
+                setProjectLoras(projects);
+            } catch (e) {
+                console.error("Error loading project loras", e);
+            }
         };
+        fetchProjectLoras();
     }, []);
 
     // --- Debounced Search Effect ---
     useEffect(() => {
-        if (!showFindNew || hfQuery.trim() === '' || hfQuery === lastSearchedQuery) return;
+        if (!showFindNew || hfQuery.trim() === '') return;
+
+        // If query and type are both the same as last search, skip unless it's a forced refresh
+        if (hfQuery === lastSearchedQuery && hfType === lastSearchedType) return;
 
         const timer = setTimeout(() => {
             performSearch();
         }, 100); // 0.1s debounce
 
         return () => clearTimeout(timer);
-    }, [hfQuery, showFindNew]);
-
-    const loadResources = async () => {
-        try {
-            const raw: Resource[] = await invoke('list_all_resources_command');
-            setResources(raw);
-
-            // Load project-based LoRAs
-            const projects: ProjectLoraInfo[] = await invoke('list_loras_by_project_command');
-            setProjectLoras(projects);
-        } catch (e) {
-            addLogMessage(`Error loading resources: ${e}`);
-        }
-    };
+    }, [hfQuery, hfType, showFindNew]);
 
     const loadToken = async () => {
         try {
@@ -472,16 +446,25 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         }
 
         // 3. HF Weights Selection Logic (Safetensors + Configs)
-        const weights = files.filter(f => f.file_type === 'weight' || f.file_type === 'config');
+        const weights = files.filter(f => f.file_type === 'weight' || f.file_type === 'config' || f.file_type === 'info' || f.file_type === 'other');
         if (weights.length > 0) {
             // Select all relevant files for a full model download
             // Typically: .safetensors, config.json, tokenizer.json, vocab.json/txt
             weights.forEach(w => {
                 const name = w.path.toLowerCase();
-                if (name.endsWith(".safetensors") ||
-                    name.includes("config") ||
-                    name.includes("tokenizer") ||
-                    name.includes("vocab")) {
+                const isConfig = name.includes("config.json") ||
+                    name.includes("tokenizer.json") ||
+                    name.includes("tokenizer_config.json") ||
+                    name.includes("special_tokens_map.json") ||
+                    name.includes("chat_template.json") ||
+                    name.includes("vocab.json") ||
+                    name.includes("merges.txt") ||
+                    name.includes("generation_config.json") ||
+                    name.endsWith(".index.json");
+
+                const isSafetensor = name.endsWith(".safetensors");
+
+                if (isConfig || isSafetensor) {
                     newSelectedWeights.add(w.path);
                 }
             });
@@ -658,7 +641,25 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
 
     // --- Dataset Conversion ---
     const handleConvertDataset = async (r: Resource) => {
-        if (convertingMap[r.path]) return;
+        if (isConvertingMap[r.path]) return;
+
+        const taskId = `conv_${Date.now()}`;
+
+        setDownloadTasks(prev => [...prev, {
+            id: taskId,
+            name: `Converting ${r.name}`,
+            progress: 0,
+            status: 'downloading',
+            type: 'dataset',
+            onCancel: async () => {
+                try {
+                    await invoke('cancel_download_command', { taskId: taskId });
+                    addLogMessage(`Conversion cancelled: ${taskId}`);
+                } catch (e) {
+                    addLogMessage(`Failed to cancel conversion: ${e}`);
+                }
+            }
+        }]);
 
         setConvertingMap(prev => ({ ...prev, [r.path]: true }));
         addNotification('Starting dataset conversion...', 'info');
@@ -666,7 +667,8 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         try {
             await invoke('convert_dataset_command', {
                 sourcePath: r.path,
-                destinationPath: r.path // Output to same folder (in /processed_data subfolder)
+                destinationPath: r.path, // Output to same folder (in /processed_data subfolder)
+                taskId: taskId
             });
 
             addNotification('Dataset converted successfully!', 'success');
@@ -679,11 +681,31 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         }
     };
 
+    const handleFixDataset = async (r: Resource) => {
+        if (fixingMap[r.path]) return;
+        setFixingMap(prev => ({ ...prev, [r.path]: true }));
+        addNotification('Starting dataset repair...', 'info');
+
+        try {
+            await invoke('fix_dataset_command', { sourcePath: r.path });
+            addNotification('Dataset repaired successfully!', 'success');
+            loadResources();
+        } catch (e) {
+            addNotification(`Repair failed: ${e}`, 'error');
+            addLogMessage(`Repair Error: ${e}`);
+        } finally {
+            setFixingMap(prev => ({ ...prev, [r.path]: false }));
+        }
+    };
+
+
+
     // --- Search & HF Actions ---
     const performSearch = async () => {
         if (!hfQuery) return;
         setIsSearching(true);
         setLastSearchedQuery(hfQuery);
+        setLastSearchedType(hfType);
         try {
             const res: HFSearchResult[] = await invoke('search_huggingface_command', { query: hfQuery, resourceType: hfType });
             setHfResults(res);
@@ -860,6 +882,7 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
 
                     <div className="rd-dropdown-container" ref={importRef}>
                         <div
+                            className={`rd-import-btn ${isImportOpen ? 'open' : ''}`}
                             onClick={() => setIsImportOpen(!isImportOpen)}
                             style={{
                                 display: 'flex',
@@ -877,46 +900,25 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                         >
                             <FolderInput size={16} />
                             <span>Import</span>
-                            <ChevronDown size={14} style={{ marginLeft: '4px', transform: isImportOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', color: '#9ca3af' }} />
+                            <ChevronDown size={14} style={{ transform: isImportOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
                         </div>
                         {isImportOpen && (
-                            <div style={{
-                                position: 'absolute',
-                                top: '100%',
-                                right: 0,
-                                marginTop: '6px',
-                                width: '160px',
-                                background: '#18181b',
-                                border: '1px solid rgba(255,255,255,0.1)',
-                                borderRadius: '10px',
-                                boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
-                                zIndex: 1000,
-                                padding: '6px',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '2px'
-                            }}>
+                            <div className="rd-dropdown-menu">
                                 <div
+                                    className="rd-dropdown-item"
                                     onClick={() => { handleImport('model'); setIsImportOpen(false); }}
-                                    style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', color: '#e4e4e7', transition: 'background 0.1s' }}
-                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                                 >
                                     Import Model
                                 </div>
                                 <div
+                                    className="rd-dropdown-item"
                                     onClick={() => { handleImport('lora'); setIsImportOpen(false); }}
-                                    style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', color: '#e4e4e7', transition: 'background 0.1s' }}
-                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                                 >
                                     Import LoRA
                                 </div>
                                 <div
+                                    className="rd-dropdown-item"
                                     onClick={() => { handleImport('dataset'); setIsImportOpen(false); }}
-                                    style={{ padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', color: '#e4e4e7', transition: 'background 0.1s' }}
-                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                                 >
                                     Import Dataset
                                 </div>
@@ -948,16 +950,14 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                     <ResourceRow
                                         key={r.path}
                                         resource={r}
-                                        isExpanded={expandedResourceId === r.path}
-                                        details={expandedFiles[r.path]}
                                         isSelected={selectedPaths.has(r.path)}
                                         toggleSelection={toggleSelection}
                                         handleExpandResource={handleExpandResource}
                                         handleConvertDataset={handleConvertDataset}
+                                        handleFixDataset={() => { }}
                                         handleDelete={handleDelete}
-                                        handleDownloadSingleFile={handleDownloadSingleFile}
-                                        converting={convertingMap[r.path]}
-                                        loadingExpansion={loadingExpansion}
+                                        converting={!!isConvertingMap[r.path]}
+                                        fixing={false}
                                     />
                                 ))}
                                 {localModels.length === 0 && <span className="text-muted italic">No models found.</span>}
@@ -1007,21 +1007,17 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                             <ChevronRight size={16} />
                                         }
                                         <Layers size={18} className="text-purple-400" />
-                                        <span style={{ fontWeight: '600' }}>{project.project_name}</span>
-                                        <span style={{
-                                            marginLeft: 'auto',
-                                            fontSize: '0.85rem',
-                                            color: 'rgba(255,255,255,0.5)'
-                                        }}>
+                                        <span className="rd-project-title">{project.project_name}</span>
+                                        <span className="rd-project-count">
                                             {project.checkpoints.length} checkpoint{project.checkpoints.length !== 1 ? 's' : ''}
                                         </span>
                                     </div>
 
                                     {/* Checkpoints */}
                                     {expandedProjects.has(project.project_name) && (
-                                        <div className="rd-grid" style={{ marginLeft: '32px' }}>
+                                        <div className="list-container" style={{ marginLeft: 'var(--space-8)', marginBottom: 'var(--space-4)' }}>
                                             {project.checkpoints.map(checkpoint => (
-                                                <div key={checkpoint.path} className="rd-item">
+                                                <div key={checkpoint.path} className="list-item">
                                                     <div
                                                         className={`rd-item-select ${selectedPaths.has(checkpoint.path) ? 'selected' : ''}`}
                                                         onClick={() => toggleSelection(checkpoint.path)}
@@ -1029,12 +1025,12 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                                         {selectedPaths.has(checkpoint.path) ? <Check size={20} /> : <Square size={20} />}
                                                     </div>
 
-                                                    <div className="rd-item-icon">
-                                                        <Layers size={22} />
+                                                    <div className="rd-item-icon" style={{ width: '32px', height: '32px' }}>
+                                                        <Layers size={18} />
                                                     </div>
 
                                                     <div className="rd-item-details">
-                                                        <div className="rd-item-name" title={checkpoint.name}>
+                                                        <div className="rd-item-name" style={{ fontSize: '0.875rem' }}>
                                                             {checkpoint.name}
                                                         </div>
                                                         <div className="rd-item-meta">
@@ -1073,21 +1069,19 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                     </div>
                     {sections.datasets && (
                         <div className="rd-section-body">
-                            <div className="rd-grid">
+                            <div className="rd-section-content">
                                 {datasets.map(r => (
                                     <ResourceRow
                                         key={r.path}
                                         resource={r}
-                                        isExpanded={expandedResourceId === r.path}
-                                        details={expandedFiles[r.path]}
                                         isSelected={selectedPaths.has(r.path)}
                                         toggleSelection={toggleSelection}
                                         handleExpandResource={handleExpandResource}
                                         handleConvertDataset={handleConvertDataset}
+                                        handleFixDataset={handleFixDataset}
                                         handleDelete={handleDelete}
-                                        handleDownloadSingleFile={handleDownloadSingleFile}
-                                        converting={convertingMap[r.path]}
-                                        loadingExpansion={loadingExpansion}
+                                        converting={!!isConvertingMap[r.path]}
+                                        fixing={!!fixingMap[r.path]}
                                     />
                                 ))}
                                 {datasets.length === 0 && <span className="text-muted italic">No datasets found.</span>}
@@ -1125,7 +1119,12 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                 placeholder={`Search HuggingFace ${hfType}s...`}
                                 value={hfQuery}
                                 onChange={e => setHfQuery(e.target.value)}
-                                // Removed onKeyDown Enter since we have debounce
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Tab') {
+                                        e.preventDefault();
+                                        setHfType(hfType === 'model' ? 'dataset' : 'model');
+                                    }
+                                }}
                                 autoFocus
                             />
                             <button className="btn btn-icon">
@@ -1413,6 +1412,62 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                 </div>
                             </div>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* --- Resource Detail Overlay --- */}
+            {activeResource && (
+                <div className="rd-overlay" onClick={() => setExpandedResourceId(null)}>
+                    <div className="rd-overlay-card" onClick={e => e.stopPropagation()}>
+                        <div className="rd-overlay-header">
+                            <div className="rd-overlay-header-info">
+                                <h2>{activeResource.name}</h2>
+                                <div className="rd-item-meta">
+                                    <span>{activeResource.size}</span>
+                                    {activeResource.quantization && <span className="rd-badge blue">{activeResource.quantization}</span>}
+                                    {activeResource.is_mmproj && <span className="rd-badge purple">Vision</span>}
+                                </div>
+                            </div>
+                            <button className="fn-close-btn" onClick={() => setExpandedResourceId(null)}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="rd-overlay-body">
+                            {loadingExpansion ? (
+                                <div className="flex justify-center p-8"><Loader2 size={32} className="animate-spin text-purple-400" /></div>
+                            ) : (
+                                <div className="rd-file-grid">
+                                    {activeFiles.length === 0 ? (
+                                        <div className="p-8 text-center text-muted italic">No files found in this directory.</div>
+                                    ) : (
+                                        activeFiles.map(file => (
+                                            <div key={file.name} className="rd-file-row">
+                                                <div className="rd-file-info">
+                                                    <span className="rd-file-name" title={file.name}>{file.name}</span>
+                                                    {file.size && <span className="rd-file-size">{formatBytes(file.size)}</span>}
+                                                </div>
+                                                <div className="rd-file-actions">
+                                                    {file.isLocal ? (
+                                                        <button className="rd-file-action-btn downloaded" disabled>
+                                                            <Check size={16} />
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            className="rd-file-action-btn"
+                                                            title="Download file"
+                                                            onClick={() => handleDownloadSingleFile(activeResource, file.name)}
+                                                        >
+                                                            <Plus size={16} />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}
