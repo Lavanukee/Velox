@@ -113,7 +113,34 @@ pub fn run() {
                     .stderr(Stdio::piped());
 
                 match cmd.spawn() {
-                    Ok(child) => {
+                    Ok(mut child) => {
+                        let stdout = child.stdout.take();
+                        let stderr = child.stderr.take();
+
+                        // Spawn threads to pipe output to logs
+                        if let Some(stdout) = stdout {
+                            let app_handle_c = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                use tokio::io::{AsyncBufReadExt, BufReader};
+                                let reader = BufReader::new(stdout);
+                                let mut lines = reader.lines();
+                                while let Ok(Some(line)) = lines.next_line().await {
+                                    app_handle_c.emit("log", format!("TB: {}", line)).ok();
+                                }
+                            });
+                        }
+                        if let Some(stderr) = stderr {
+                            let app_handle_c = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                use tokio::io::{AsyncBufReadExt, BufReader};
+                                let reader = BufReader::new(stderr);
+                                let mut lines = reader.lines();
+                                while let Ok(Some(line)) = lines.next_line().await {
+                                    app_handle_c.emit("log", format!("TB ERR: {}", line)).ok();
+                                }
+                            });
+                        }
+
                         let mut guard = python_state.tensorboard_child.lock().await;
                         *guard = Some(child);
                         let mut pguard = python_state.tensorboard_port.lock().await;
@@ -137,6 +164,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             check_python_installed_command,
+            check_python_minimal_command,
             check_llama_binary_command,
             check_llama_binary_exists_command,
             download_llama_binary_command,

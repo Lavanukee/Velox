@@ -77,6 +77,29 @@ pub async fn check_python_installed_command(app_handle: AppHandle) -> Result<boo
 }
 
 #[tauri::command]
+pub async fn check_python_minimal_command(app_handle: AppHandle) -> Result<bool, String> {
+    match get_python_command(&app_handle) {
+        Ok((python_exe, _)) => {
+            // Fast check: Just ensure Python executable works
+            let output = create_hidden_command(&python_exe)
+                .arg("-c")
+                .arg("print('Minimal Ready')")
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                Ok(stdout.contains("Minimal Ready"))
+            } else {
+                Ok(false)
+            }
+        }
+        Err(_) => Ok(false),
+    }
+}
+
+#[tauri::command]
 pub async fn check_llama_binary_command(app_handle: AppHandle) -> Result<bool, String> {
     let bin_dir = get_binaries_dir(&app_handle);
     debug!("Binaries directory: {:?}", bin_dir);

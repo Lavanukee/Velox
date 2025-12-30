@@ -2,7 +2,7 @@ import React from 'react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Toggle } from '../components/Toggle';
-import { RotateCcw, Info, RefreshCw, Cpu, MemoryStick, HardDrive } from 'lucide-react';
+import { RotateCcw, Info, RefreshCw, Cpu, MemoryStick, HardDrive, Zap } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -26,7 +26,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onReinstallPython, onReinst
     const {
         autoUpdate, setAutoUpdate,
         showInfoTooltips, setShowInfoTooltips,
-        appScale, setAppScale
+        autoProcessDatasets, setAutoProcessDatasets
     } = useApp();
 
     const [hwInfo, setHwInfo] = React.useState<HardwareInfo | null>(null);
@@ -83,39 +83,20 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onReinstallPython, onReinst
                         <Toggle checked={showInfoTooltips} onChange={setShowInfoTooltips} />
                     </div>
 
-                    <div className="list-item" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', justifyContent: 'space-between', padding: '16px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
-                            <div style={{ padding: '10px', background: 'rgba(167,139,250,0.1)', borderRadius: '10px', color: 'var(--accent-primary)' }}>
-                                <RefreshCw size={20} />
+                    <div className="list-item" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                            <div style={{ padding: '10px', background: 'rgba(234,179,8,0.1)', borderRadius: '10px', color: 'var(--accent-yellow)' }}>
+                                <Zap size={20} />
                             </div>
-                            <div style={{ flex: 1 }}>
-                                <h3 className="font-semibold text-main">Interface Scale</h3>
-                                <p className="text-sm text-secondary">Adjust the global application scale.</p>
+                            <div>
+                                <h3 className="font-semibold text-main">Auto Process Datasets</h3>
+                                <p className="text-sm text-secondary">Automatically convert and process new datasets upon import.</p>
                             </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: '200px' }}>
-                            <input
-                                type="range"
-                                min="0.5"
-                                max="1.0"
-                                step="0.05"
-                                value={appScale}
-                                onChange={(e) => setAppScale(Number(e.target.value))}
-                                style={{
-                                    flex: 1,
-                                    height: '6px',
-                                    borderRadius: '3px',
-                                    background: 'var(--bg-elevated)',
-                                    appearance: 'none',
-                                    outline: 'none',
-                                    cursor: 'pointer'
-                                }}
-                            />
-                            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--accent-primary)', minWidth: '40px' }}>
-                                {Math.round(appScale * 100)}%
-                            </span>
-                        </div>
+                        <Toggle checked={autoProcessDatasets} onChange={setAutoProcessDatasets} />
                     </div>
+
+
                 </div>
             </Card>
 

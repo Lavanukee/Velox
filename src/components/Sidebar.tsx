@@ -78,7 +78,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                     minHeight: '64px'
                 }}
             >
-                {!isCollapsed && <span className="font-bold text-lg tracking-wider bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">VELOX</span>}
                 <button
                     onClick={() => setIsCollapsed(!isCollapsed)}
                     title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
@@ -107,6 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                 >
                     <PanelLeft size={18} />
                 </button>
+                {!isCollapsed && <span className="font-bold text-lg tracking-wider bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">VELOX</span>}
             </div>
 
             {/* Navigation */}

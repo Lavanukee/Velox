@@ -430,6 +430,7 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     const [projectLoras, setProjectLoras] = useState<ProjectLoraInfo[]>([]);
     const [selectedProject, setSelectedProject] = useState('');
     const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
+    const [benchmarkLoraAdapter, setBenchmarkLoraAdapter] = useState('');
 
     // Backend Logs / Progress
     const [promptProgress, setPromptProgress] = useState<number | null>(null); // 0-100 or null
@@ -742,7 +743,8 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         slot: 0 | 1,
         model: string,
         _requestedPort: number, // Ignore requested port, enforce slot-based port
-        engine: 'llamacpp' | 'transformers'
+        engine: 'llamacpp' | 'transformers',
+        loraPath?: string | null
     ) => {
         const isPrimary = slot === 0;
         const setStatus = isPrimary ? setInfServerStatus : setSecondaryBenchStatus;
@@ -775,7 +777,7 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
                 await invoke('start_llama_server_command', {
                     modelPath: model,
                     mmprojPath: '',
-                    loraPath: '',
+                    loraPath: loraPath || '',
                     gpuLayers: infGpuLayers,
                     ctxSize: contextSize,
                     batchSize: infBatchSize,
@@ -823,7 +825,7 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
 
     const handleStartServer = async () => {
         // Start Primary
-        await startServerInstance(0, selectedBaseModel, modelConfig?.serverPort || 8080, infInferenceEngine);
+        await startServerInstance(0, selectedBaseModel, modelConfig?.serverPort || 8080, infInferenceEngine, selectedLoraAdapter);
 
         // If Benchmarking/Blind Test is active and secondary model is selected, start it too
         if ((isBenchmarking || isBlindTest) && selectedBenchmarkModel) {
@@ -834,7 +836,7 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
             if (isGGUF) {
                 // Delay slightly to avoid port race or resource spike?
                 setTimeout(() => {
-                    startServerInstance(1, selectedBenchmarkModel, secondaryBenchPort, 'llamacpp');
+                    startServerInstance(1, selectedBenchmarkModel, secondaryBenchPort, 'llamacpp', benchmarkLoraAdapter);
                 }, 1000);
             } else {
                 addLogMessage('[Secondary] Only GGUF models are currently supported for secondary slot.');
@@ -1337,9 +1339,9 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             }}
                             title={`Evaluation Mode: ${evaluationMode.charAt(0).toUpperCase() + evaluationMode.slice(1)}`}
                         >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <rect x="3" y="3" width="18" height="18" rx="2" />
-                                <line x1="12" y1="3" x2="12" y2="21" />
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeOpacity="0.5" />
+                                <line x1="12" y1="2" x2="12" y2="22" stroke="currentColor" strokeDasharray="2 2" />
                             </svg>
                         </button>
                         {evaluationMode !== 'off' && (
@@ -1532,6 +1534,22 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                 options={modelOptions}
                                                 placeholder="Select Model B"
                                             />
+                                            {/* LoRA Selector for Model B - simplified flat list for now or reuse projectLoras logic if needed */}
+                                            {/* For simplicity finding ANY checkpoint from projectLoras that matches user choice */}
+                                            <div style={{ marginTop: '4px' }}>
+                                                <Select
+                                                    value={benchmarkLoraAdapter}
+                                                    onChange={(val) => setBenchmarkLoraAdapter(val)}
+                                                    options={[
+                                                        { value: '', label: 'No LoRA' },
+                                                        ...projectLoras.flatMap(p => p.checkpoints.map(c => ({
+                                                            value: c.path,
+                                                            label: `${p.project_name} / ${c.name}`
+                                                        })))
+                                                    ]}
+                                                    placeholder="Select LoRA B"
+                                                />
+                                            </div>
                                         </div>
                                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
                                             {benchmarkMessages.map((msg, idx) => (
@@ -1720,9 +1738,9 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             <div style={{
                                 width: '100%',
                                 maxWidth: '850px',
-                                background: '#2d2d2d', // Dark grey capsule
+                                background: 'var(--bg-elevated)', // Dark grey capsule
                                 borderRadius: '24px',
-                                border: '1px solid rgba(255,255,255,0.08)',
+                                border: '1px solid var(--border-subtle)',
                                 boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
                                 display: 'flex',
                                 flexDirection: 'column',
@@ -1759,7 +1777,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                         width: '100%',
                                         background: 'transparent',
                                         border: 'none',
-                                        color: '#fff',
+                                        color: 'var(--text-main)',
                                         fontSize: '16px',
                                         padding: '12px 16px',
                                         outline: 'none',
@@ -1902,7 +1920,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(167, 139, 250, 0.5)'}
                                 onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
                             />
-                            <div style={{ width: canvasWidth, minWidth: '300px', borderLeft: '1px solid rgba(255,255,255,0.08)', background: '#121216', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                            <div style={{ width: canvasWidth, minWidth: '300px', borderLeft: '1px solid var(--border-subtle)', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
                                 <CanvasPanel
                                     artifacts={infCanvasArtifacts}
                                     onArtifactsChange={setInfCanvasArtifacts}
@@ -1928,8 +1946,8 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             <div style={{
                                 width: settingsWidth,
                                 minWidth: '250px',
-                                borderLeft: '1px solid var(--border-subtle, rgba(255,255,255,0.05))',
-                                background: 'var(--bg-surface, #121216)',
+                                borderLeft: '1px solid var(--border-subtle)',
+                                background: 'var(--bg-surface)',
                                 display: 'flex',
                                 flexDirection: 'column',
                                 overflowY: 'auto',
@@ -1937,7 +1955,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 boxShadow: 'inset 2px 0 8px rgba(0,0,0,0.15)'
                             }}>
                                 {/* Parameters Section */}
-                                <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                <div style={{ padding: '20px', borderBottom: '1px solid var(--border-subtle)' }}>
                                     <h3 style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>Parameters</h3>
 
                                     <div style={{ marginBottom: '16px' }}>
@@ -1959,7 +1977,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                         <textarea
                                             value={systemPrompt}
                                             onChange={(e) => setSystemPrompt(e.target.value)}
-                                            style={{ width: '100%', height: '80px', padding: '10px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px', resize: 'vertical' }}
+                                            style={{ width: '100%', height: '80px', padding: '10px', background: 'var(--bg-input)', border: '1px solid var(--border-default)', borderRadius: '8px', color: 'var(--text-main)', fontSize: '13px', resize: 'vertical' }}
                                             placeholder="You are a helpful assistant..."
                                         />
                                     </div>
@@ -2055,17 +2073,17 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
 
                                                 <div>
                                                     <label style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}><Cpu size={14} /> Batch Size</label>
-                                                    <input type="number" value={infBatchSize} onChange={(e) => setInfBatchSize(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
+                                                    <input type="number" value={infBatchSize} onChange={(e) => setInfBatchSize(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-input)', border: '1px solid var(--border-default)', borderRadius: '8px', color: 'var(--text-main)', fontSize: '13px' }} />
                                                 </div>
 
                                                 <div>
                                                     <label style={{ fontSize: '13px', marginBottom: '6px', display: 'block' }}>Micro-Batch Size</label>
-                                                    <input type="number" value={infUbatchSize} onChange={(e) => setInfUbatchSize(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
+                                                    <input type="number" value={infUbatchSize} onChange={(e) => setInfUbatchSize(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-input)', border: '1px solid var(--border-default)', borderRadius: '8px', color: 'var(--text-main)', fontSize: '13px' }} />
                                                 </div>
 
                                                 <div>
                                                     <label style={{ fontSize: '13px', marginBottom: '6px', display: 'block' }}>Threads (0 = auto)</label>
-                                                    <input type="number" value={infThreads} onChange={(e) => setInfThreads(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white', fontSize: '13px' }} />
+                                                    <input type="number" value={infThreads} onChange={(e) => setInfThreads(Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-input)', border: '1px solid var(--border-default)', borderRadius: '8px', color: 'var(--text-main)', fontSize: '13px' }} />
                                                 </div>
                                             </div>
                                         )}

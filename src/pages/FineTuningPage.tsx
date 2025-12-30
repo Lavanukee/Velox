@@ -37,6 +37,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
         ftProjectName, setFtProjectName,
         ftSelectedModel: selectedModel, setFtSelectedModel: setSelectedModel,
         ftSelectedDataset: selectedDataset, setFtSelectedDataset: setSelectedDataset,
+        ftSelectedDatasets: selectedDatasets, setFtSelectedDatasets: setSelectedDatasets,
         ftLocalDatasetPath: localDatasetPath, setFtLocalDatasetPath: setLocalDatasetPath,
         ftHfModelId: hfModelId, setFtHfModelId: setHfModelId,
         ftHfDatasetId: hfDatasetId, setFtHfDatasetId: setHfDatasetId,
@@ -65,8 +66,8 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
         .filter(r => r.type === 'dataset')
         .map(r => r.path);
 
-    // Multi-dataset selection (new feature)
-    const [selectedDatasets, setSelectedDatasets] = useState<string[]>([]);
+    // Multi-dataset selection (persisted in context)
+    // const [selectedDatasets, setSelectedDatasets] = useState<string[]>([]); // Removed local state
 
     // Training method and adapter type
     const [trainingMethod, setTrainingMethod] = useState<'sft' | 'dpo'>('sft');

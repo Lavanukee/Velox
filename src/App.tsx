@@ -142,12 +142,29 @@ function AppContent() {
         if (isMounted) setSetupMessage("Verifying Environment...");
 
         // 1. Check Python Dependencies
+        // 1. Check Python Dependencies (Fast Path)
+        // We use a minimal check to get the user in quickly.
+        const isPythonMinimalReady = await invoke<boolean>('check_python_minimal_command');
+
+        if (!isPythonMinimalReady && isMounted) {
+          setSetupMessage("Python Environment incomplete. Auto-repairing...");
+          await runGlobalSetup(true);
+          if (isMounted) addNotification("Python Environment Repaired!", "success");
+        }
+
+        // If minimal is ready, we let them through to the next check, 
+        // but we kick off a full verification in background? 
+        // Actually, if we want to be safe, we just trust minimal for now.
+        // If full check fails later, they will get errors when trying to run things.
+
+        /*
         const isPythonReady = await invoke<boolean>('check_python_installed_command');
         if (!isPythonReady && isMounted) {
           setSetupMessage("Python Environment incomplete. Auto-repairing...");
           await runGlobalSetup(true);
           if (isMounted) addNotification("Python Environment Repaired!", "success");
         }
+        */
 
         // 2. Check Llama Binary & Updates
         if (isMounted) setSetupMessage("Checking Inference Engine...");

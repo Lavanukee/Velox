@@ -97,6 +97,8 @@ interface AppContextType {
   setRdHfType: (type: 'model' | 'dataset') => void;
   rdSelectedPaths: Set<string>;
   setRdSelectedPaths: React.Dispatch<React.SetStateAction<Set<string>>>;
+  autoProcessDatasets: boolean;
+  setAutoProcessDatasets: (val: boolean) => void;
 
   // Fine-Tuning State
   ftProjectName: string;
@@ -105,6 +107,8 @@ interface AppContextType {
   setFtSelectedModel: (model: string) => void;
   ftSelectedDataset: string;
   setFtSelectedDataset: (dataset: string) => void;
+  ftSelectedDatasets: string[];
+  setFtSelectedDatasets: React.Dispatch<React.SetStateAction<string[]>>;
   ftLocalDatasetPath: string;
   setFtLocalDatasetPath: (path: string) => void;
   ftHfModelId: string;
@@ -261,11 +265,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [rdHfQuery, setRdHfQuery] = useState('');
   const [rdHfType, setRdHfType] = useState<'model' | 'dataset'>('model');
   const [rdSelectedPaths, setRdSelectedPaths] = useState<Set<string>>(new Set());
+  const [autoProcessDatasets, setAutoProcessDatasetsState] = useState(true);
 
   // Fine-Tuning State
   const [ftProjectName, setFtProjectName] = useState('');
   const [ftSelectedModel, setFtSelectedModel] = useState('');
   const [ftSelectedDataset, setFtSelectedDataset] = useState('');
+  const [ftSelectedDatasets, setFtSelectedDatasets] = useState<string[]>([]);
   const [ftLocalDatasetPath, setFtLocalDatasetPath] = useState('');
   const [ftHfModelId, setFtHfModelId] = useState('');
   const [ftHfDatasetId, setFtHfDatasetId] = useState('');
@@ -577,6 +583,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('velox_show_info', JSON.stringify(val));
   };
 
+  const setAutoProcessDatasets = (val: boolean) => {
+    setAutoProcessDatasetsState(val);
+    localStorage.setItem('velox_auto_process', JSON.stringify(val));
+  };
+
   // Initial Load & Listeners
   useEffect(() => {
     loadResources();
@@ -589,9 +600,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [loadResources]);
 
-  // Auto-Conversion Logic (Standard Mode)
+  // Auto-Conversion Logic
   useEffect(() => {
-    if (userMode !== 'user') return;
+    if (!autoProcessDatasets) return;
 
     const autoConvert = async () => {
       // Find un-processed datasets that aren't already converting
@@ -628,6 +639,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const savedShowInfo = localStorage.getItem('velox_show_info');
     if (savedShowInfo !== null) setShowInfoTooltipsState(JSON.parse(savedShowInfo));
+
+    const savedAutoProcess = localStorage.getItem('velox_auto_process');
+    if (savedAutoProcess !== null) setAutoProcessDatasetsState(JSON.parse(savedAutoProcess));
   }, []);
 
   const value = {
@@ -666,6 +680,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ftProjectName, setFtProjectName,
     ftSelectedModel, setFtSelectedModel,
     ftSelectedDataset, setFtSelectedDataset,
+    ftSelectedDatasets, setFtSelectedDatasets,
     ftLocalDatasetPath, setFtLocalDatasetPath,
     ftHfModelId, setFtHfModelId,
     ftHfDatasetId, setFtHfDatasetId,
@@ -721,6 +736,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // App Level
     appScale, setAppScale,
+    autoProcessDatasets, setAutoProcessDatasets,
   };
 
   return (

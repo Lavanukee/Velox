@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional, Any, Union
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, Qwen2VLForConditionalGeneration, AutoProcessor
 from threading import Thread
 
 # Initialize FastAPI
@@ -192,24 +192,53 @@ def load_model(model_path: str):
     global model, tokenizer
     print(f"Loading model from {model_path} on {device}...")
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
+
+def load_model(model_path: str):
+    global model, tokenizer
+    print(f"Loading model from {model_path} on {device}...")
+    try:
+        trust_remote_code = True
         
-        # Fix: Ensure pad_token is set to avoid CUDA errors when pad_token == eos_token
-        if tokenizer.pad_token is None or tokenizer.pad_token == tokenizer.eos_token:
-            # Try to use a dedicated pad token, or add one if necessary
-            if hasattr(tokenizer, 'add_special_tokens'):
-                # For models without a pad token, use eos_token but set padding_side
-                tokenizer.pad_token = tokenizer.eos_token
-                tokenizer.padding_side = "left"  # Prevents attention mask issues
-            print(f"Set pad_token to: {tokenizer.pad_token}")
-        
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path, 
-            device_map="auto", 
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-            local_files_only=True,
-            trust_remote_code=True
-        )
+        # Qwen2-VL Specific Loading
+        if "Qwen2-VL" in model_path:
+            print("Detected Qwen2-VL model. Using Qwen2VLForConditionalGeneration.")
+            model = Qwen2VLForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                device_map="auto",
+                trust_remote_code=trust_remote_code
+            )
+            # Qwen2-VL uses a processor, but for text-only chat via this server, we might strictly need the tokenizer.
+            # However, Qwen2-VL's tokenizer is often loaded via AutoTokenizer as well.
+            tokenizer = AutoProcessor.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+            # The processor acts as tokenizer in some contexts but for apply_chat_template we might need the actual tokenizer?
+            # Actually, standard Qwen2-VL usage:
+            # processor = AutoProcessor.from_pretrained(...)
+            # inputs = processor(text=[...], images=..., return_tensors="pt")
+            # But this server is designed for Text-Only API compatibility for now?
+            # If we want just text, we can try AutoTokenizer.
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+            except:
+                print("Could not load AutoTokenizer for Qwen2-VL, falling back to processor as tokenizer proxy unlikely to work for chat template.")
+        else:
+            # Standard CausalLM Loading
+            tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=trust_remote_code)
+            
+            # ... (pad token logic)
+            if tokenizer.pad_token is None or tokenizer.pad_token == tokenizer.eos_token:
+                if hasattr(tokenizer, 'add_special_tokens'):
+                    tokenizer.pad_token = tokenizer.eos_token
+                    tokenizer.padding_side = "left"
+                print(f"Set pad_token to: {tokenizer.pad_token}")
+
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path, 
+                device_map="auto", 
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                local_files_only=True,
+                trust_remote_code=trust_remote_code
+            )
         
         # Ensure model config matches tokenizer
         if hasattr(model.config, 'pad_token_id') and model.config.pad_token_id is None:
