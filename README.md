@@ -75,12 +75,11 @@ Velox is currently in **Alpha**.
     *   More seamless general inference experience and the ability to use this as an LMStudio alternative.
     *   More multimodal support: Audio in and out, and possibly image and video out aswell, 3d models aswell?
     *   A whole lot of UI polish
-*   **Hardware Compatibility:** Possibly:
+*   **Hardware Compatibility (possibly):**
     *   AMD/Intel GPU Support
     *   Possibly Macos Support
-    *   though I don't have much access to any of those hardware
 
-Pull Requests are welcome, I'm always open to suggestions and feedback.
+Though I don't have much access to any of those hardware, I'm always open to suggestions and feedback.
 
 
 ## Acknowledgements
