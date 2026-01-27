@@ -331,15 +331,17 @@ export const RecipeBuilder: React.FC<RecipeBuilderProps> = ({ onSave, onRun }) =
                             <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginRight: '4px' }}>INSERT BLOCKS:</span>
 
                             <button
+                                draggable
+                                onDragStart={(e) => handleDragStart(e, 'generator', 'basic')}
                                 onClick={() => editorRef.current?.insertBlock({ type: 'generator', prompt: [''] })}
                                 style={{
                                     display: 'flex', alignItems: 'center', gap: '6px',
                                     padding: '6px 12px', background: 'rgba(99, 102, 241, 0.1)',
                                     border: '1px solid var(--accent-primary)', borderRadius: '6px',
-                                    fontSize: '12px', cursor: 'pointer', color: 'var(--accent-primary)',
+                                    fontSize: '12px', cursor: 'grab', color: 'var(--accent-primary)',
                                     transition: 'all 0.2s'
                                 }}
-                                title="Click to insert Generator"
+                                title="Click to insert or Drag"
                             >
                                 <Sparkles size={14} /> Generator
                             </button>
@@ -349,15 +351,17 @@ export const RecipeBuilder: React.FC<RecipeBuilderProps> = ({ onSave, onRun }) =
                             {recipe.sources.map(src => (
                                 <button
                                     key={src.id}
+                                    draggable
+                                    onDragStart={(e) => handleDragStart(e, 'source', src.id)}
                                     onClick={() => editorRef.current?.insertBlock({ type: 'source_data', sourceId: src.id })}
                                     style={{
                                         display: 'flex', alignItems: 'center', gap: '6px',
                                         padding: '6px 12px', background: 'rgba(16, 185, 129, 0.1)',
                                         border: '1px solid var(--accent-success, #10b981)', borderRadius: '6px',
-                                        fontSize: '12px', cursor: 'pointer', color: 'var(--accent-success, #10b981)',
+                                        fontSize: '12px', cursor: 'grab', color: 'var(--accent-success, #10b981)',
                                         transition: 'all 0.2s'
                                     }}
-                                    title={`Click to insert ${src.name}`}
+                                    title={`Click to insert ${src.name} or Drag`}
                                 >
                                     <Database size={14} /> {src.name}
                                 </button>
