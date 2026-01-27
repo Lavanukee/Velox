@@ -63,7 +63,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
                             width: `${Math.random() * 4 + 2}px`,
                             height: `${Math.random() * 4 + 2}px`,
                             borderRadius: '50%',
-                            background: i % 2 === 0 ? '#a78bfa' : '#7dd3fc',
+                            background: i % 2 === 0 ? '#3b82f6' : '#7dd3fc',
                             left: `${Math.random() * 100}%`,
                             top: `${Math.random() * 100}%`,
                             animation: `float ${Math.random() * 3 + 2}s ease-in-out infinite`,
@@ -86,14 +86,14 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
                     height: '120px',
                     margin: '0 auto 32px',
                     borderRadius: '24px',
-                    background: 'linear-gradient(135deg, #a78bfa 0%, #7dd3fc 100%)',
+                    background: 'linear-gradient(135deg, #3b82f6 0%, #7dd3fc 100%)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     position: 'relative',
                     animation: 'pulse 2s ease-in-out infinite',
                     boxShadow: `
-                        0 0 60px rgba(167, 139, 250, 0.5),
+                        0 0 60px rgba(59, 130, 246, 0.5),
                         0 0 120px rgba(125, 211, 252, 0.3),
                         inset 0 0 60px rgba(255, 255, 255, 0.1)
                     `
@@ -105,7 +105,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
                 <h1 style={{
                     fontSize: '48px',
                     fontWeight: 700,
-                    background: 'linear-gradient(135deg, #a78bfa 0%, #7dd3fc 100%)',
+                    background: 'linear-gradient(135deg, #3b82f6 0%, #7dd3fc 100%)',
                     WebkitBackgroundClip: 'text',
                     WebkitTextFillColor: 'transparent',
                     backgroundClip: 'text',
@@ -139,10 +139,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
                     }}>
                         <div style={{
                             height: '100%',
-                            background: 'linear-gradient(90deg, #a78bfa 0%, #7dd3fc 100%)',
+                            background: 'linear-gradient(90deg, #3b82f6 0%, #7dd3fc 100%)',
                             width: `${progress}%`,
                             transition: 'width 0.3s ease-out',
-                            boxShadow: '0 0 20px rgba(167, 139, 250, 0.6)',
+                            boxShadow: '0 0 20px rgba(59, 130, 246, 0.6)',
                             position: 'relative'
                         }}>
                             {/* Shimmer effect */}

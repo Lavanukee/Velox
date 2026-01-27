@@ -1,19 +1,19 @@
 :root {
-  --bg-app-legacy: #09090b;
-  --bg-panel: #121216;
-  --bg-input: #1c1c24;
-  --border-color: #2d2d38;
+  --bg-app-legacy: var(--bg-app);
+  --bg-panel: var(--bg-surface);
+  --bg-input: var(--bg-input);
+  --border-color: var(--border-default);
 
-  --text-main: #e4e4e7;
-  --text-muted: #a1a1aa;
+  --text-main: var(--text-main);
+  --text-muted: var(--text-secondary);
 
-  --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-  --gradient-text: linear-gradient(90deg, #3b82f6, #8b5cf6, #eab308);
-  --accent-yellow: #eab308;
-  --accent-blue: #3b82f6;
-  --accent-purple: #8b5cf6;
-  --accent-green: #10b981;
-  --accent-red: #ef4444;
+  --gradient-primary: var(--gradient-primary);
+  --gradient-text: var(--accent-gradient);
+  --accent-yellow: var(--accent-yellow);
+  --accent-blue: var(--accent-blue);
+  --accent-legacy: var(--accent-blue);
+  --accent-green: var(--accent-green);
+  --accent-red: var(--accent-red);
 
   --radius-md: 12px;
   --radius-sm: 8px;
@@ -27,7 +27,7 @@
   justify-content: space-between;
 
   padding: 1rem 2rem;
-  background: rgba(18, 18, 22, 0.8);
+  background: var(--bg-surface);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border-color);
   position: sticky;
@@ -63,7 +63,7 @@
 
 .nav-btn:hover {
   color: var(--text-main);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-highlight);
 }
 
 .nav-btn.active {
@@ -265,8 +265,8 @@
 }
 
 .dashboard-section.drop-zone.drag-over {
-  border-color: var(--accent-purple);
-  background: rgba(139, 92, 246, 0.05);
+  border-color: var(--accent-legacy);
+  background: rgba(59, 130, 246, 0.05);
 }
 
 .dashboard-section.drop-zone.drag-over::before {
@@ -275,7 +275,7 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  background: var(--accent-purple);
+  background: var(--accent-blue);
   color: white;
   padding: 1rem 2rem;
   border-radius: var(--radius-md);
@@ -529,7 +529,7 @@ button {
 
 .btn-secondary:hover {
   border-color: var(--text-muted);
-  background: #272732;
+  background: var(--bg-highlight);
 }
 
 .btn-danger {
@@ -749,7 +749,7 @@ button {
 .conversion-info {
   margin-top: 2rem;
   padding: 1rem;
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--accent-blue-muted);
   border-radius: var(--radius-sm);
   border-left: 3px solid var(--accent-blue);
 }
@@ -777,7 +777,7 @@ button {
 
 .drag-drop-zone:hover {
   border-color: var(--accent-blue);
-  background: rgba(59, 130, 246, 0.05);
+  background: var(--accent-blue-muted);
 }
 
 /* --- Other panels remain the same --- */

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { startDrag } from '@crabnebula/tauri-plugin-drag';
 import { useApp } from './context/AppContext';
 import { DownloadTask, Resource } from './types';
 import {
@@ -23,8 +24,14 @@ import {
     Plus,
     Wrench,
     Sparkles,
-    AlertTriangle
+    AlertTriangle,
+    ArrowUpRight,
+    SlidersHorizontal,
+    Pencil
 } from 'lucide-react';
+import { Modal } from './components/Modal';
+import { Button } from './components/Button';
+import { Input } from './components/Input';
 import './styles/ResourceDashboard.css';
 
 // --- Types ---
@@ -34,11 +41,13 @@ interface CheckpointInfo {
     path: string;
     is_final: boolean;
     step_number: number | null;
+    gguf_path?: string | null;
 }
 
 interface ProjectLoraInfo {
     project_name: string;
     checkpoints: CheckpointInfo[];
+    base_model?: string;
 }
 
 interface HFSearchResult {
@@ -64,6 +73,7 @@ interface Props {
     addLogMessage: (message: string) => void;
     addNotification: (message: string, type?: 'success' | 'error' | 'info') => void;
     setDownloadTasks: React.Dispatch<React.SetStateAction<DownloadTask[]>>;
+    downloadTasks: DownloadTask[];
 }
 
 // --- Helpers ---
@@ -95,6 +105,9 @@ interface ResourceRowProps {
     handleConvertDataset: (r: Resource) => void;
     handleFixDataset: (r: Resource) => void;
     handleDelete: (r: Resource) => void;
+    handleConvertModel: (r: Resource) => void;
+    handleConvertLora: (r: Resource) => void;
+    handleRename: (r: Resource) => void;
     converting: boolean;
     fixing: boolean;
 }
@@ -107,11 +120,59 @@ const ResourceRow: React.FC<ResourceRowProps> = ({
     handleConvertDataset,
     handleFixDataset,
     handleDelete,
+    handleConvertModel,
+    handleConvertLora,
+    handleRename,
     converting,
     fixing
 }) => {
+    const [absPath, setAbsPath] = useState<string>('');
+
+    // Pre-resolve path on hover to ensure drag starts instantly
+    const handleMouseEnter = () => {
+        if (!absPath) {
+            invoke<string>('resolve_path_command', { path: r.path })
+                .then(p => setAbsPath(p))
+                .catch(console.error);
+        }
+    };
+
+    const handleDragStart = async (e: React.DragEvent) => {
+        // Prevent default to allow Tauri to handle
+        e.preventDefault();
+
+        try {
+            let targetPath = absPath;
+            if (!targetPath) {
+                targetPath = await invoke('resolve_path_command', { path: r.path });
+            }
+
+            if (!targetPath) {
+                console.error("Failed to resolve path for drag:", r.path);
+                return;
+            }
+
+            console.log("Starting drag for:", targetPath);
+            await startDrag({
+                item: [targetPath],
+                // Pass valid string or allow plugin default if handling specific
+                icon: '' // Empty string is standard for "default" in many plugins
+            });
+        } catch (err) {
+            console.error('Drag failed:', err);
+            // Verify if user notification is needed
+        }
+    };
+
     return (
-        <div className="rd-item" onClick={() => handleExpandResource(r)}>
+        <div
+            className="rd-item"
+            onClick={() => handleExpandResource(r)}
+            draggable={true}
+            onDragStart={handleDragStart}
+            onMouseEnter={handleMouseEnter}
+            style={{ cursor: 'grab' }}
+        >
             <div
                 className={`rd-item-select ${isSelected ? 'selected' : ''}`}
                 onClick={(e) => { e.stopPropagation(); toggleSelection(r.path); }}
@@ -130,13 +191,13 @@ const ResourceRow: React.FC<ResourceRowProps> = ({
                 <div className="rd-item-meta">
                     <span>{r.size}</span>
                     {r.quantization && <span className="rd-badge blue">{r.quantization}</span>}
-                    {r.is_mmproj && <span className="rd-badge purple">Vision</span>}
+                    {r.is_mmproj && <span className="rd-badge blue">Vision</span>}
                     {r.type === 'dataset' && (
                         <>
                             {r.dataset_format && <span className="rd-badge blue">{r.dataset_format.toUpperCase()}</span>}
                             {r.count !== undefined && <span className="rd-badge gray" title={`${r.count} examples`}>{formatCount(r.count)} examples</span>}
                             {r.modalities?.map(m => (
-                                <span key={m} className={`rd-badge ${m === 'Vision' ? 'purple' : 'gray'}`}>{m}</span>
+                                <span key={m} className={`rd-badge ${m === 'Vision' ? 'blue' : 'gray'}`}>{m}</span>
                             ))}
                             {r.is_processed && (
                                 <span className="rd-badge green">
@@ -177,6 +238,29 @@ const ResourceRow: React.FC<ResourceRowProps> = ({
                         </button>
                     </>
                 )}
+                {(r.type === 'model' || r.type === 'lora') && (
+                    <button
+                        className="rd-action-btn primary"
+                        title="Convert to GGUF (Unsloth -> fallback)"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (r.type === 'lora') handleConvertLora(r);
+                            else handleConvertModel(r);
+                        }}
+                        disabled={converting}
+                    >
+                        {converting ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
+                        <span>Convert</span>
+                    </button>
+                )}
+                <button
+                    className="rd-action-btn secondary"
+                    title="Rename"
+                    onClick={(e) => { e.stopPropagation(); handleRename(r); }}
+                >
+                    <Pencil size={14} />
+                    <span>Rename</span>
+                </button>
                 <button
                     onClick={() => handleDelete(r)}
                     className="rd-delete-btn"
@@ -192,16 +276,24 @@ const ResourceRow: React.FC<ResourceRowProps> = ({
 
 // --- Component ---
 
-const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, setDownloadTasks }) => {
+const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, setDownloadTasks, downloadTasks }) => {
     const {
         rdHfQuery: hfQuery, setRdHfQuery: setHfQuery,
+        rdHfAuthor: hfAuthor, setRdHfAuthor: setAuthor,
+        rdHfModalities: hfModalities, setRdHfModalities: setModalities,
+        rdHfSizeRange: hfSizeRange, setRdHfSizeRange: setSizeRange,
         rdHfType: hfType, setRdHfType: setHfType,
+        rdShowFindNew: showFindNew, setRdShowFindNew: setShowFindNew,
         rdSelectedPaths: selectedPaths, setRdSelectedPaths: setSelectedPaths,
         resources, loadResources, isConvertingMap, setConvertingMap
     } = useApp();
 
     // Local processing states
     const [fixingMap, setFixingMap] = useState<Record<string, boolean>>({});
+
+    // Rename State
+    const [renamingResource, setRenamingResource] = useState<Resource | null>(null);
+    const [renameValue, setRenameValue] = useState('');
 
     // --- State: Dashboard & UI ---
     const [projectLoras, setProjectLoras] = useState<ProjectLoraInfo[]>([]);
@@ -216,11 +308,13 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
     });
 
     // --- State: Find New / HF Search ---
-    const [showFindNew, setShowFindNew] = useState(false);
-    const [lastSearchedQuery, setLastSearchedQuery] = useState(''); // For debounce check
+    const [showFilters, setShowFilters] = useState(false);
+    const [lastSearchedQuery, setLastSearchedQuery] = useState("");
+    // For debounce check
     const [lastSearchedType, setLastSearchedType] = useState<'model' | 'dataset'>('model');
     const [hfResults, setHfResults] = useState<HFSearchResult[]>([]);
     const [isSearching, setIsSearching] = useState(false);
+    const [isDownloading, setIsDownloading] = useState(false);
     const [hfToken, setHfToken] = useState('');
 
     // --- State: File Browser & Selection ---
@@ -276,6 +370,25 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
+
+    // --- Global Drag Prevention (Browser Default) ---
+    useEffect(() => {
+        const preventDefault = (e: DragEvent) => e.preventDefault();
+        document.addEventListener('dragover', preventDefault);
+        document.addEventListener('dragenter', preventDefault);
+        document.addEventListener('dragleave', preventDefault);
+        document.addEventListener('drop', preventDefault);
+        return () => {
+            document.removeEventListener('dragover', preventDefault);
+            document.removeEventListener('dragenter', preventDefault);
+            document.removeEventListener('dragleave', preventDefault);
+            document.removeEventListener('drop', preventDefault);
+        };
+    }, []);
+
+    // --- Drag and Drop Handler (Now handled by GlobalDropZone in App.tsx) ---
+    // Global drop handling provides better UX with full-screen overlay
+    // and intelligent file type detection via analyze_drop_command.
 
     // --- Initialization ---
     useEffect(() => {
@@ -446,23 +559,26 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         }
 
         // 3. HF Weights Selection Logic (Safetensors + Configs)
-        const weights = files.filter(f => f.file_type === 'weight' || f.file_type === 'config' || f.file_type === 'info' || f.file_type === 'other');
+        // Broaden filter to ensure we catch index files regardless of strict classification
+        const weights = files.filter(f => f.file_type !== 'gguf' && f.file_type !== 'mmproj' && f.file_type !== 'dataset_file');
+
         if (weights.length > 0) {
             // Select all relevant files for a full model download
             // Typically: .safetensors, config.json, tokenizer.json, vocab.json/txt
             weights.forEach(w => {
                 const name = w.path.toLowerCase();
                 const isConfig = name.includes("config.json") ||
-                    name.includes("tokenizer.json") ||
-                    name.includes("tokenizer_config.json") ||
+                    name.includes("tokenizer") ||
                     name.includes("special_tokens_map.json") ||
                     name.includes("chat_template.json") ||
                     name.includes("vocab.json") ||
                     name.includes("merges.txt") ||
                     name.includes("generation_config.json") ||
-                    name.endsWith(".index.json");
+                    name.includes("preprocessor_config.json") ||
+                    name.endsWith(".index.json") ||
+                    name.endsWith(".json"); // Fallback for other json configs
 
-                const isSafetensor = name.endsWith(".safetensors");
+                const isSafetensor = name.endsWith(".safetensors") || name.endsWith(".bin") || name.endsWith(".pt");
 
                 if (isConfig || isSafetensor) {
                     newSelectedWeights.add(w.path);
@@ -492,7 +608,14 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         try {
             const selected = await open({
                 multiple: false,
-                directory: type === 'model' || type === 'dataset',
+                directory: type === 'model',
+                filters: type === 'dataset' ? [
+                    { name: 'Dataset Files', extensions: ['jsonl', 'parquet', 'arrow', 'csv', 'json'] },
+                    { name: 'All Files', extensions: ['*'] }
+                ] : type === 'lora' ? [
+                    { name: 'LoRA Files', extensions: ['safetensors', 'bin', 'pt'] },
+                    { name: 'All Files', extensions: ['*'] }
+                ] : undefined,
             });
             if (selected) {
                 await invoke('import_resource_command', {
@@ -504,6 +627,43 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
             }
         } catch (e) {
             addNotification(`Import failed: ${e}`, 'error');
+        }
+    };
+
+    const handleDelete = async (r: Resource) => {
+        if (!await confirm(`Are you sure you want to delete ${r.name}?`)) return;
+        try {
+            await invoke('delete_resource_command', {
+                resourceType: r.type === 'gguf' ? 'model' : r.type,
+                resourcePath: r.path.split(/[\\/]/).pop() // Just filename
+            });
+            addNotification("Deleted successfully", "success");
+            loadResources();
+        } catch (e) {
+            addNotification(`Delete failed: ${e}`, 'error');
+        }
+    };
+
+    const handleRename = (r: Resource) => {
+        setRenamingResource(r);
+        setRenameValue(r.name);
+    };
+
+    const handleRenameSubmit = async () => {
+        if (!renamingResource || !renameValue.trim()) return;
+
+        try {
+            await invoke('rename_resource_command', {
+                resourceType: renamingResource.type === 'gguf' ? 'model' : renamingResource.type,
+                currentName: renamingResource.name,
+                newName: renameValue.trim()
+            });
+            addNotification(`Renamed to ${renameValue}`, 'success');
+            setRenamingResource(null);
+            loadResources();
+        } catch (e) {
+            console.error(e);
+            addNotification(`Rename failed: ${e}`, 'error');
         }
     };
 
@@ -524,15 +684,7 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         }
     };
 
-    const handleDelete = async (r: Resource) => {
-        try {
-            await invoke('delete_resource_command', { resourceType: r.type, resourcePath: r.path });
-            loadResources();
-            addNotification('Deleted', 'success');
-        } catch (e) {
-            addNotification(`Delete failed: ${e}`, 'error');
-        }
-    };
+
 
     const handleExpandResource = async (r: Resource) => {
         if (expandedResourceId === r.path) {
@@ -595,6 +747,19 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         const repoId = folderName.replace("--", "/");
         const taskId = `dl_file_${Date.now()}`;
 
+        // Add to global download tasks
+        setDownloadTasks(prev => [
+            ...prev,
+            {
+                id: taskId,
+                type: r.type,
+                name: filename,
+                progress: 0,
+                status: 'pending',
+                onCancel: () => invoke('cancel_download_command', { taskId }).catch(console.error)
+            }
+        ]);
+
         addNotification(`Downloading ${filename}...`, 'info');
 
         try {
@@ -613,16 +778,10 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                     taskId
                 });
             }
-            // Optimistic update
-            setExpandedFiles(prev => {
-                const current = prev[r.path];
-                if (!current) return prev;
-                const newLocal = new Set(current.local);
-                newLocal.add(filename); // Assume it will arrive
-                return { ...prev, [r.path]: { ...current, local: newLocal } };
-            });
+            // Removed optimistic update - wait for background tasks to finish and refresh
         } catch (e) {
             addNotification(`Download failed: ${e}`, 'error');
+            setDownloadTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'error' } : t));
         }
     };
 
@@ -633,6 +792,7 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                 resourcePath: checkpointPath
             });
             loadResources();
+            setTimeout(() => loadResources(), 500); // Double check refresh
             addNotification('Checkpoint deleted', 'success');
         } catch (e) {
             addNotification(`Delete failed: ${e}`, 'error');
@@ -681,6 +841,138 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         }
     };
 
+    const handleConvertModel = async (r: Resource) => {
+        if (isConvertingMap[r.path]) return;
+
+        const taskId = `conv_mod_${Date.now()}`;
+        setDownloadTasks(prev => [...prev, {
+            id: taskId,
+            name: `Converting ${r.name}`,
+            progress: 0,
+            status: 'downloading',
+            type: 'model',
+            onCancel: async () => { }
+        }]);
+
+        setConvertingMap(prev => ({ ...prev, [r.path]: true }));
+        addNotification(`Starting GGUF conversion for ${r.name}...`, 'info');
+
+        // Default to q4_k_m for general usage
+        const quant = "q8_0";
+        const outputPath = r.path + `.${quant}.gguf`;
+
+        try {
+            // 1. Try Unsloth
+            addLogMessage(`Attempting Unsloth conversion for ${r.name}...`);
+            await invoke('convert_unsloth_gguf_command', {
+                sourcePath: r.path,
+                outputPath: outputPath,
+                quantizationType: quant,
+                loraPath: null
+            });
+            addNotification('Unsloth conversion successful!', 'success');
+            loadResources();
+        } catch (unslothErr) {
+            console.warn("Unsloth conversion failed, trying fallback", unslothErr);
+            addLogMessage(`Unsloth failed: ${unslothErr}. Falling back to llama.cpp...`);
+
+            // 2. Fallback to Standard
+            try {
+                await invoke('convert_hf_to_gguf_command', {
+                    sourcePath: r.path,
+                    outputPath: outputPath,
+                    quantizationType: quant
+                });
+                addNotification('Fallback conversion successful!', 'success');
+                loadResources();
+            } catch (fbErr) {
+                console.error("Fallback failed", fbErr);
+                addNotification(`All conversion methods failed: ${fbErr}`, 'error');
+            }
+        } finally {
+            setDownloadTasks(prev => prev.filter(t => t.id !== taskId));
+            setConvertingMap(prev => ({ ...prev, [r.path]: false }));
+        }
+    };
+
+    const handleConvertLora = async (r: Resource) => {
+        if (isConvertingMap[r.path]) return;
+        let taskId: string | null = null;
+
+        // 1. Prompt for Base Model if not provided
+        try {
+            let base_model_path: string | undefined | null = r.base_model;
+
+            if (!base_model_path) {
+                addNotification("Please select the Base Model for this LoRA", 'info');
+                base_model_path = await open({
+                    multiple: false,
+                    directory: true,
+                    title: "Select Base Model for LoRA Conversion"
+                }) as string | null;
+            }
+
+            if (!base_model_path) return; // Cancelled
+
+            taskId = `conv_lora_${Date.now()}`;
+            setDownloadTasks(prev => [...prev, {
+                id: taskId!,
+                name: `Converting LoRA ${r.name}`,
+                progress: 0,
+                status: 'downloading',
+                type: 'model',
+                onCancel: async () => { }
+            }]);
+
+            setConvertingMap(prev => ({ ...prev, [r.path]: true }));
+            addNotification(`Converting LoRA ${r.name}...`, 'info');
+
+            const quant = "q8_0";
+            const outputPath = r.path + `.${quant}.gguf`; // Merged GGUF usually?
+
+            // 1. Try Unsloth (Merge & Export)
+            // Note: Unsloth conversion with lora_path implies merging into base
+            try {
+                addLogMessage(`Attempting Unsloth Merge+Convert...`);
+                await invoke('convert_unsloth_gguf_command', {
+                    sourcePath: base_model_path as string, // Base
+                    outputPath: outputPath,
+                    quantizationType: quant,
+                    loraPath: r.path
+                });
+                addNotification('Unsloth LoRA Merge successful!', 'success');
+                loadResources();
+            } catch (unslothErr) {
+                console.warn("Unsloth LoRA failed", unslothErr);
+                addLogMessage(`Unsloth LoRA failed. Falling back to simple LoRA adapter conversion...`);
+
+                // 2. Fallback: Convert LoRA to GGUF Adapter (Not merged)
+                // This requires a different output name usually to distinguish, but user expects GGUF.
+                // Ideally we'd merge with llama.cpp `export-lora` but that's complex.
+                // We will run `convert_lora_to_gguf_command` which creates an adapter GGUF.
+                try {
+                    const adapterOutput = r.path + `.adapter.${quant}.gguf`;
+                    await invoke('convert_lora_to_gguf_command', {
+                        loraPath: r.path,
+                        basePath: base_model_path as string,
+                        outputPath: adapterOutput,
+                        quantizationType: quant
+                    });
+                    addNotification(`LoRA converted to GGUF Adapter (not merged): ${adapterOutput}`, 'success');
+                    loadResources();
+                } catch (fbErr) {
+                    addNotification(`LoRA conversion failed: ${fbErr}`, 'error');
+                }
+            }
+
+        } catch (e) {
+            console.error(e);
+        } finally {
+            if (taskId) setDownloadTasks(prev => prev.filter(t => t.id !== taskId));
+            setConvertingMap(prev => ({ ...prev, [r.path]: false }));
+        }
+    };
+
     const handleFixDataset = async (r: Resource) => {
         if (fixingMap[r.path]) return;
         setFixingMap(prev => ({ ...prev, [r.path]: true }));
@@ -707,7 +999,13 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
         setLastSearchedQuery(hfQuery);
         setLastSearchedType(hfType);
         try {
-            const res: HFSearchResult[] = await invoke('search_huggingface_command', { query: hfQuery, resourceType: hfType });
+            const res: HFSearchResult[] = await invoke('search_huggingface_command', {
+                query: hfQuery,
+                resourceType: hfType,
+                author: hfAuthor || null,
+                modalities: hfModalities || null,
+                sizeRange: hfSizeRange || null
+            });
             setHfResults(res);
         } catch {
             addNotification('Search failed', 'error');
@@ -781,7 +1079,8 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
             return;
         }
 
-        const taskId = `dl_${Date.now()}`;
+        setIsDownloading(true);
+        const taskId = `dl_repo_${Date.now()}`;
         let filesToDownload: string[] = [];
 
         if (hfType === 'model') {
@@ -796,55 +1095,47 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
 
         if (filesToDownload.length === 0) {
             addNotification('No files selected.', 'error');
+            setIsDownloading(false);
             return;
         }
 
-        const handleCancel = async () => {
-            try {
-                await invoke('cancel_download_command', { taskId: taskId });
-                addLogMessage(`Download cancelled: ${taskId}`);
-            } catch (e) {
-                addLogMessage(`Failed to cancel download: ${e}`);
-            }
-        };
-
-        // Use setTimeout to avoid synchronous state update conflict (Error #310)
-        setTimeout(() => {
-            setDownloadTasks(prev => [...prev, {
+        // Add to global download tasks
+        setDownloadTasks(prev => [
+            ...prev,
+            {
                 id: taskId,
+                type: hfType as any,
                 name: selectedRepo,
                 progress: 0,
-                status: 'downloading',
-                type: hfType,
-                onCancel: handleCancel
-            }]);
-        }, 0);
-
-        setShowFindNew(false);
+                status: 'pending',
+                onCancel: () => invoke('cancel_download_command', { taskId }).catch(console.error)
+            }
+        ]);
 
         try {
-            if (hfType === 'model') {
-                await invoke('download_hf_model_command', {
-                    modelId: selectedRepo,
-                    files: filesToDownload,
-                    token: hfToken || null,
-                    taskId: taskId
-                });
-            } else {
+            if (hfType === 'dataset') {
                 await invoke('download_hf_dataset_command', {
                     datasetId: selectedRepo,
-                    files: filesToDownload,
+                    files: filesToDownload.length > 0 ? filesToDownload : null,
                     token: hfToken || null,
-                    taskId: taskId
+                    taskId
+                });
+            } else {
+                await invoke('download_hf_model_command', {
+                    modelId: selectedRepo,
+                    files: filesToDownload.length > 0 ? filesToDownload : null,
+                    token: hfToken || null,
+                    taskId
                 });
             }
-
-            addNotification('Download started', 'success');
+            addNotification("Download started in background", "info");
+            setShowFindNew(false);
             loadResources();
         } catch (e) {
-            addLogMessage(`Download error: ${e}`);
             addNotification(`Download failed: ${e}`, 'error');
+            setDownloadTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'error' } : t));
         } finally {
+            setIsDownloading(false);
             // Reset
             setSelectedGGUFs(new Set());
             setSelectedMMProjs(new Set());
@@ -852,6 +1143,24 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
             setSelectedDatasetFiles(new Set());
             setSelectedRepo(null);
             setRepoFiles([]);
+        }
+    };
+
+    const handleDeleteProject = async (projectName: string) => {
+        if (!window.confirm(`Are you sure you want to delete project "${projectName}"? This cannot be undone.`)) return;
+
+        try {
+            const path = `data/outputs/${projectName}`;
+            await invoke('delete_resource_command', {
+                resourceType: 'lora_project',
+                resourcePath: path
+            });
+            addLogMessage(`Project ${projectName} deleted.`);
+            addNotification(`Project ${projectName} deleted`, 'success');
+            loadResources();
+        } catch (e) {
+            addLogMessage(`Error deleting project: ${e}`);
+            addNotification(`Error deleting project: ${e}`, 'error');
         }
     };
 
@@ -956,6 +1265,9 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                         handleConvertDataset={handleConvertDataset}
                                         handleFixDataset={() => { }}
                                         handleDelete={handleDelete}
+                                        handleConvertModel={handleConvertModel}
+                                        handleConvertLora={handleConvertLora}
+                                        handleRename={handleRename}
                                         converting={!!isConvertingMap[r.path]}
                                         fixing={false}
                                     />
@@ -1006,11 +1318,25 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                             <ChevronDown size={16} /> :
                                             <ChevronRight size={16} />
                                         }
-                                        <Layers size={18} className="text-purple-400" />
+                                        <Layers size={18} className="text-blue-400" />
                                         <span className="rd-project-title">{project.project_name}</span>
                                         <span className="rd-project-count">
                                             {project.checkpoints.length} checkpoint{project.checkpoints.length !== 1 ? 's' : ''}
                                         </span>
+                                        <div style={{ flex: 1 }} />
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDeleteProject(project.project_name);
+                                            }}
+                                            className="rd-delete-btn"
+                                            title="Delete Project"
+                                            style={{ opacity: 0.7, padding: '4px' }}
+                                            onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
+                                            onMouseLeave={(e) => e.currentTarget.style.opacity = '0.7'}
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
                                     </div>
 
                                     {/* Checkpoints */}
@@ -1050,6 +1376,42 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                                     >
                                                         <Trash2 size={18} />
                                                     </button>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (checkpoint.gguf_path) {
+                                                                // If GGUF exists, treat this as an export action
+                                                                toggleSelection(checkpoint.gguf_path);
+                                                                handleExport();
+                                                            } else {
+                                                                // Construct a temporary Resource object for the LoRA
+                                                                const loraResource: Resource = {
+                                                                    name: checkpoint.name,
+                                                                    path: checkpoint.path,
+                                                                    type: 'lora',
+                                                                    size: 'N/A', // or fetch
+                                                                    is_mmproj: false,
+                                                                    base_model: project.base_model
+                                                                };
+                                                                handleConvertLora(loraResource);
+                                                            }
+                                                        }}
+                                                        className="rd-delete-btn"
+                                                        style={{ color: checkpoint.gguf_path ? 'var(--accent-primary)' : 'rgba(255,255,255,0.4)' }}
+                                                        title={checkpoint.gguf_path ? "Export GGUF" : "Convert to GGUF"}
+                                                        disabled={!!isConvertingMap[checkpoint.path]}
+                                                    >
+                                                        {isConvertingMap[checkpoint.path] ? (
+                                                            <Loader2 size={18} className="animate-spin" />
+                                                        ) : checkpoint.gguf_path ? (
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                                <FileCode size={18} />
+                                                                <ArrowUpRight size={14} />
+                                                            </div>
+                                                        ) : (
+                                                            <Download size={18} />
+                                                        )}
+                                                    </button>
                                                 </div>
                                             ))}
                                         </div>
@@ -1080,6 +1442,9 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                         handleConvertDataset={handleConvertDataset}
                                         handleFixDataset={handleFixDataset}
                                         handleDelete={handleDelete}
+                                        handleConvertModel={handleConvertModel}
+                                        handleConvertLora={handleConvertLora}
+                                        handleRename={handleRename}
                                         converting={!!isConvertingMap[r.path]}
                                         fixing={!!fixingMap[r.path]}
                                     />
@@ -1092,6 +1457,40 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
             </div>
 
             {/* --- Find New Overlay --- */}
+
+            {/* Rename Modal */}
+            <Modal
+                isOpen={!!renamingResource}
+                onClose={() => setRenamingResource(null)}
+                title={`Rename ${renamingResource?.type === 'gguf' ? 'Model' : renamingResource?.type === 'dataset' ? 'Dataset' : 'Resource'}`}
+                footer={
+                    <>
+                        <Button variant="ghost" onClick={() => setRenamingResource(null)}>Cancel</Button>
+                        <Button variant="primary" onClick={handleRenameSubmit} disabled={!renameValue.trim() || renameValue === renamingResource?.name}>
+                            Rename
+                        </Button>
+                    </>
+                }
+            >
+                <div className="flex flex-col gap-4">
+                    <p className="text-sm text-gray-400">
+                        Enter a new name for <strong>{renamingResource?.name}</strong>.
+                        Note: This will rename the file/folder on disk.
+                    </p>
+                    <Input
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        placeholder="New name..."
+                        autoFocus
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && renameValue.trim()) {
+                                handleRenameSubmit();
+                            }
+                        }}
+                    />
+                </div>
+            </Modal>
+
             {showFindNew && (
                 <div className="fn-overlay">
                     {/* Header */}
@@ -1127,10 +1526,82 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                 }}
                                 autoFocus
                             />
-                            <button className="btn btn-icon">
+                            <button className="btn btn-icon" onClick={() => setShowFilters(!showFilters)} title="Toggle Filters">
+                                <SlidersHorizontal size={18} style={{ color: showFilters ? 'var(--accent-primary)' : 'inherit' }} />
+                            </button>
+                            <button className="btn btn-icon" onClick={performSearch}>
                                 {isSearching ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
                             </button>
                         </div>
+                        {showFilters && (
+                            <div className="fn-filters-bar" style={{
+                                display: 'flex',
+                                gap: '12px',
+                                padding: '12px 24px',
+                                background: 'rgba(255,255,255,0.03)',
+                                borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                alignItems: 'center'
+                            }}>
+                                <div className="fn-filter-group" style={{ flex: 1 }}>
+                                    <label style={{ fontSize: '11px', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px', display: 'block' }}>Author / Org</label>
+                                    <input
+                                        className="fn-input-small"
+                                        placeholder="Username or Org..."
+                                        value={hfAuthor}
+                                        onChange={e => setAuthor(e.target.value)}
+                                        style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '6px 10px', color: 'white', fontSize: '13px' }}
+                                    />
+                                </div>
+                                <div className="fn-filter-group" style={{ flex: 1 }}>
+                                    <label style={{ fontSize: '11px', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px', display: 'block' }}>Modality</label>
+                                    <select
+                                        className="fn-input-small"
+                                        value={hfModalities}
+                                        onChange={e => setModalities(e.target.value)}
+                                        style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '6px 10px', color: 'white', fontSize: '13px' }}
+                                    >
+                                        <option value="">Any Modality</option>
+                                        <option value="text">Text</option>
+                                        <option value="image">Vision / Image</option>
+                                        <option value="audio">Audio</option>
+                                        <option value="video">Video</option>
+                                        <option value="3d">3D</option>
+                                    </select>
+                                </div>
+                                {hfType === 'dataset' && (
+                                    <div className="fn-filter-group" style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '11px', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px', display: 'block' }}>Size Range</label>
+                                        <select
+                                            className="fn-input-small"
+                                            value={hfSizeRange}
+                                            onChange={e => setSizeRange(e.target.value)}
+                                            style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '6px 10px', color: 'white', fontSize: '13px' }}
+                                        >
+                                            <option value="">Any Size</option>
+                                            <option value="1K">&lt; 1K rows</option>
+                                            <option value="10K">1K - 10K</option>
+                                            <option value="100K">10K - 100K</option>
+                                            <option value="1M">100K - 1M</option>
+                                            <option value="10M">1M - 10M</option>
+                                            <option value="100M">10M - 100M</option>
+                                            <option value="1G">100M - 1B</option>
+                                            <option value="10G">1B - 10B</option>
+                                        </select>
+                                    </div>
+                                )}
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => {
+                                        setAuthor('');
+                                        setModalities('');
+                                        setSizeRange('');
+                                    }}
+                                    style={{ marginTop: '16px', padding: '6px 10px' }}
+                                >
+                                    Reset
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     <div className="fn-main">
@@ -1187,13 +1658,13 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                                     {selectedDatasetFiles.size > 0 && (
                                                         <>
                                                             <div className="fn-selected-header" style={{
-                                                                background: 'linear-gradient(135deg, rgba(167, 139, 250, 0.2) 0%, rgba(125, 211, 252, 0.1) 100%)',
-                                                                border: '1px solid rgba(167, 139, 250, 0.4)',
+                                                                background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(59, 130, 246, 0.1) 100%)',
+                                                                border: '1px solid rgba(59, 130, 246, 0.4)',
                                                                 padding: '12px 16px',
                                                                 margin: '0 0 12px 0',
                                                                 borderRadius: '8px',
                                                                 fontWeight: '600',
-                                                                color: '#c4b5fd',
+                                                                color: '#93c5fd',
                                                                 display: 'flex',
                                                                 alignItems: 'center',
                                                                 gap: '8px'
@@ -1254,13 +1725,13 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                                     {(selectedGGUFs.size > 0 || selectedMMProjs.size > 0 || selectedWeights.size > 0) && (
                                                         <>
                                                             <div className="fn-selected-header" style={{
-                                                                background: 'linear-gradient(135deg, rgba(167, 139, 250, 0.2) 0%, rgba(125, 211, 252, 0.1) 100%)',
-                                                                border: '1px solid rgba(167, 139, 250, 0.4)',
+                                                                background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(59, 130, 246, 0.1) 100%)',
+                                                                border: '1px solid rgba(59, 130, 246, 0.4)',
                                                                 padding: '12px 16px',
                                                                 margin: '0 0 12px 0',
                                                                 borderRadius: '8px',
                                                                 fontWeight: '600',
-                                                                color: '#c4b5fd',
+                                                                color: '#93c5fd',
                                                                 display: 'flex',
                                                                 alignItems: 'center',
                                                                 gap: '8px'
@@ -1395,15 +1866,24 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                 <div className="fn-actions">
                                     <button
                                         className="btn btn-primary"
-                                        disabled={!canDownload}
+                                        disabled={!canDownload || isDownloading}
                                         onClick={startDownload}
                                         style={{ width: '100%', marginTop: '1rem' }}
                                     >
-                                        <Download size={16} style={{ marginRight: '8px' }} />
-                                        {hfType === 'model'
-                                            ? `Download Selected (${selectedGGUFs.size + selectedMMProjs.size + selectedWeights.size})`
-                                            : `Download Selected (${selectedDatasetFiles.size})`
-                                        }
+                                        {isDownloading ? (
+                                            <>
+                                                <Loader2 size={16} className="animate-spin" style={{ marginRight: '8px' }} />
+                                                Starting Download...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Download size={16} style={{ marginRight: '8px' }} />
+                                                {hfType === 'model'
+                                                    ? `Download Selected (${selectedGGUFs.size + selectedMMProjs.size + selectedWeights.size})`
+                                                    : `Download Selected (${selectedDatasetFiles.size})`
+                                                }
+                                            </>
+                                        )}
                                     </button>
 
                                     {!hfToken && (
@@ -1426,7 +1906,7 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                                 <div className="rd-item-meta">
                                     <span>{activeResource.size}</span>
                                     {activeResource.quantization && <span className="rd-badge blue">{activeResource.quantization}</span>}
-                                    {activeResource.is_mmproj && <span className="rd-badge purple">Vision</span>}
+                                    {activeResource.is_mmproj && <span className="rd-badge blue">Vision</span>}
                                 </div>
                             </div>
                             <button className="fn-close-btn" onClick={() => setExpandedResourceId(null)}>
@@ -1435,35 +1915,47 @@ const ResourceDashboard: React.FC<Props> = ({ addLogMessage, addNotification, se
                         </div>
                         <div className="rd-overlay-body">
                             {loadingExpansion ? (
-                                <div className="flex justify-center p-8"><Loader2 size={32} className="animate-spin text-purple-400" /></div>
+                                <div className="flex justify-center p-8"><Loader2 size={32} className="animate-spin text-blue-400" /></div>
                             ) : (
                                 <div className="rd-file-grid">
                                     {activeFiles.length === 0 ? (
                                         <div className="p-8 text-center text-muted italic">No files found in this directory.</div>
                                     ) : (
-                                        activeFiles.map(file => (
-                                            <div key={file.name} className="rd-file-row">
-                                                <div className="rd-file-info">
-                                                    <span className="rd-file-name" title={file.name}>{file.name}</span>
-                                                    {file.size && <span className="rd-file-size">{formatBytes(file.size)}</span>}
+                                        activeFiles.map(file => {
+                                            const activeTask = downloadTasks.find(t => t.name === file.name && (t.status === 'downloading' || t.status === 'pending'));
+                                            return (
+                                                <div key={file.name} className="rd-file-row">
+                                                    <div className="rd-file-info">
+                                                        <span className="rd-file-name" title={file.name}>{file.name}</span>
+                                                        {file.size && <span className="rd-file-size">{formatBytes(file.size)}</span>}
+                                                        {activeTask && (
+                                                            <span style={{ fontSize: '10px', color: 'var(--accent-primary)', marginLeft: '8px' }}>
+                                                                {activeTask.progress > 0 ? `${Math.round(activeTask.progress)}%` : 'Pending...'}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="rd-file-actions">
+                                                        {activeTask ? (
+                                                            <div className="rd-file-action-btn loading">
+                                                                <Loader2 size={16} className="animate-spin" />
+                                                            </div>
+                                                        ) : file.isLocal ? (
+                                                            <button className="rd-file-action-btn downloaded" disabled>
+                                                                <Check size={16} />
+                                                            </button>
+                                                        ) : (
+                                                            <button
+                                                                className="rd-file-action-btn"
+                                                                title="Download file"
+                                                                onClick={() => handleDownloadSingleFile(activeResource, file.name)}
+                                                            >
+                                                                <Plus size={16} />
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                                <div className="rd-file-actions">
-                                                    {file.isLocal ? (
-                                                        <button className="rd-file-action-btn downloaded" disabled>
-                                                            <Check size={16} />
-                                                        </button>
-                                                    ) : (
-                                                        <button
-                                                            className="rd-file-action-btn"
-                                                            title="Download file"
-                                                            onClick={() => handleDownloadSingleFile(activeResource, file.name)}
-                                                        >
-                                                            <Plus size={16} />
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        ))
+                                            );
+                                        })
                                     )}
                                 </div>
                             )}

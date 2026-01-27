@@ -2,7 +2,7 @@ import React from 'react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Toggle } from '../components/Toggle';
-import { RotateCcw, Info, RefreshCw, Cpu, MemoryStick, HardDrive, Zap } from 'lucide-react';
+import { RotateCcw, Info, RefreshCw, Cpu, MemoryStick, HardDrive } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -26,7 +26,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onReinstallPython, onReinst
     const {
         autoUpdate, setAutoUpdate,
         showInfoTooltips, setShowInfoTooltips,
-        autoProcessDatasets, setAutoProcessDatasets
+        userFeatures, setUserFeatures
     } = useApp();
 
     const [hwInfo, setHwInfo] = React.useState<HardwareInfo | null>(null);
@@ -82,21 +82,91 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onReinstallPython, onReinst
                         </div>
                         <Toggle checked={showInfoTooltips} onChange={setShowInfoTooltips} />
                     </div>
+                </div>
+            </Card>
 
-                    <div className="list-item" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', justifyContent: 'space-between' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                            <div style={{ padding: '10px', background: 'rgba(234,179,8,0.1)', borderRadius: '10px', color: 'var(--accent-yellow)' }}>
-                                <Zap size={20} />
-                            </div>
-                            <div>
-                                <h3 className="font-semibold text-main">Auto Process Datasets</h3>
-                                <p className="text-sm text-secondary">Automatically convert and process new datasets upon import.</p>
-                            </div>
+            <Card>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                    <h2 className="text-xl font-bold">Feature Management</h2>
+                </div>
+                <p className="text-sm text-secondary mb-6">Granular control over specific Power User features and interface elements.</p>
+
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gap: '12px'
+                }}>
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ showUserModeToggle: !userFeatures.showUserModeToggle })}>
+                        <input type="checkbox" checked={userFeatures.showUserModeToggle} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Mode Toggle</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Show Power User switch in header</div>
                         </div>
-                        <Toggle checked={autoProcessDatasets} onChange={setAutoProcessDatasets} />
                     </div>
 
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ showAdvancedFinetuning: !userFeatures.showAdvancedFinetuning })}>
+                        <input type="checkbox" checked={userFeatures.showAdvancedFinetuning} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Advanced Fine-Tuning</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Unlock all hyperparameters</div>
+                        </div>
+                    </div>
 
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ showAdvancedInference: !userFeatures.showAdvancedInference })}>
+                        <input type="checkbox" checked={userFeatures.showAdvancedInference} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Advanced Inference</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>GPU layers & batch size controls</div>
+                        </div>
+                    </div>
+
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ showMetrics: !userFeatures.showMetrics })}>
+                        <input type="checkbox" checked={userFeatures.showMetrics} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Real-time Metrics</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Tokens/sec & latency tracking</div>
+                        </div>
+                    </div>
+
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ enableWebSearch: !userFeatures.enableWebSearch })}>
+                        <input type="checkbox" checked={userFeatures.enableWebSearch} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Web Search</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Allow model to browse internet</div>
+                        </div>
+                    </div>
+
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ enableCodeExec: !userFeatures.enableCodeExec })}>
+                        <input type="checkbox" checked={userFeatures.enableCodeExec} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Code Execution</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Run generated python locally</div>
+                        </div>
+                    </div>
+
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ enableCanvas: !userFeatures.enableCanvas })}>
+                        <input type="checkbox" checked={userFeatures.enableCanvas} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Canvas UI</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Side-by-side artifact rendering</div>
+                        </div>
+                    </div>
+
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ autoFitMemory: !userFeatures.autoFitMemory })}>
+                        <input type="checkbox" checked={userFeatures.autoFitMemory} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Memory Auto-Fit</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Automatic kv-cache management</div>
+                        </div>
+                    </div>
+
+                    <div className="selection-card" style={{ padding: '12px 16px' }} onClick={() => setUserFeatures({ autoProcessDatasets: !userFeatures.autoProcessDatasets })}>
+                        <input type="checkbox" checked={userFeatures.autoProcessDatasets} readOnly />
+                        <div style={{ flex: 1 }}>
+                            <div className="font-semibold text-sm">Auto-Process Datasets</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Background vision-tagging/conversion</div>
+                        </div>
+                    </div>
                 </div>
             </Card>
 

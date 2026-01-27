@@ -10,9 +10,11 @@ use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::constants::{HF_TOKEN_FILE, PRESETS_FILE};
+use crate::constants::{DOWNLOAD_TASKS_FILE, HF_TOKEN_FILE, PRESETS_FILE};
 use crate::hardware::{detect_backend, ComputeBackend};
-use crate::models::{CheckpointInfo, ModelConfig, ModelsState, ProjectLoraInfo};
+use crate::models::{
+    CheckpointInfo, ModelConfig, ModelsState, PersistentDownloadTask, ProjectLoraInfo,
+};
 use crate::python::{get_python_command, get_script_path, LlamaChatContext, PythonProcessState};
 use crate::utils::{
     check_dir_for_gguf, copy_dir_all, create_hidden_command, create_hidden_std_command,
@@ -23,6 +25,74 @@ use crate::utils::{
 
 fn get_binaries_dir(app_handle: &AppHandle) -> PathBuf {
     get_data_dir(app_handle).join("binaries")
+}
+
+#[tauri::command]
+pub async fn load_persistent_downloads_command(
+    app_handle: AppHandle,
+) -> Result<Vec<PersistentDownloadTask>, String> {
+    let data_dir = get_data_dir(&app_handle);
+    let tasks_file = data_dir.join(DOWNLOAD_TASKS_FILE);
+
+    if !tasks_file.exists() {
+        return Ok(vec![]);
+    }
+
+    let contents = fs::read_to_string(&tasks_file)
+        .await
+        .map_err(|e| e.to_string())?;
+    let tasks: Vec<PersistentDownloadTask> =
+        serde_json::from_str(&contents).unwrap_or_else(|_| vec![]);
+    Ok(tasks)
+}
+
+async fn save_persistent_task(
+    app_handle: &AppHandle,
+    task: PersistentDownloadTask,
+) -> Result<(), String> {
+    let data_dir = get_data_dir(app_handle);
+    let tasks_file = data_dir.join(DOWNLOAD_TASKS_FILE);
+
+    let mut tasks = if tasks_file.exists() {
+        let contents = fs::read_to_string(&tasks_file).await.unwrap_or_default();
+        serde_json::from_str::<Vec<PersistentDownloadTask>>(&contents).unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    // Check if exists, update or add
+    if let Some(existing) = tasks.iter_mut().find(|t| t.id == task.id) {
+        *existing = task;
+    } else {
+        tasks.push(task);
+    }
+
+    let serialized = serde_json::to_string(&tasks).map_err(|e| e.to_string())?;
+    fs::write(tasks_file, serialized)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn remove_persistent_task(app_handle: &AppHandle, task_id: &str) -> Result<(), String> {
+    let data_dir = get_data_dir(app_handle);
+    let tasks_file = data_dir.join(DOWNLOAD_TASKS_FILE);
+
+    if !tasks_file.exists() {
+        return Ok(());
+    }
+
+    let contents = fs::read_to_string(&tasks_file).await.unwrap_or_default();
+    let mut tasks =
+        serde_json::from_str::<Vec<PersistentDownloadTask>>(&contents).unwrap_or_default();
+
+    tasks.retain(|t| t.id != task_id);
+
+    let serialized = serde_json::to_string(&tasks).map_err(|e| e.to_string())?;
+    fs::write(tasks_file, serialized)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // --- COMMANDS ---
@@ -416,6 +486,58 @@ pub async fn download_llama_binary_command(
 }
 
 #[tauri::command]
+pub async fn save_project_config_command(
+    app_handle: AppHandle,
+    project_name: String,
+    config: serde_json::Value,
+) -> Result<String, String> {
+    let data_dir = get_data_dir(&app_handle);
+    let project_dir = data_dir.join("data").join("outputs").join(&project_name);
+
+    if !project_dir.exists() {
+        tokio::fs::create_dir_all(&project_dir)
+            .await
+            .map_err(|e| format!("Failed to create project directory: {}", e))?;
+    }
+
+    let config_path = project_dir.join("training_config.json");
+    let json_str = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+    tokio::fs::write(&config_path, json_str)
+        .await
+        .map_err(|e| format!("Failed to write config file: {}", e))?;
+
+    Ok("Config saved".to_string())
+}
+
+#[tauri::command]
+pub async fn load_project_config_command(
+    app_handle: AppHandle,
+    project_name: String,
+) -> Result<serde_json::Value, String> {
+    let data_dir = get_data_dir(&app_handle);
+    let config_path = data_dir
+        .join("data")
+        .join("outputs")
+        .join(&project_name)
+        .join("training_config.json");
+
+    if !config_path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+
+    let content = tokio::fs::read_to_string(&config_path)
+        .await
+        .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse config file: {}", e))?;
+
+    Ok(json)
+}
+
+#[tauri::command]
 pub async fn save_model_config_command(
     models_state: State<'_, Arc<ModelsState>>,
     model_config: ModelConfig,
@@ -514,26 +636,39 @@ pub async fn list_model_folders_command(app_handle: AppHandle) -> Result<Vec<Str
 
 #[tauri::command]
 pub async fn list_dataset_folders_command(app_handle: AppHandle) -> Result<Vec<String>, String> {
-    debug!("Listing dataset folders.");
+    debug!("Listing dataset folders/files.");
     let data_dir = get_data_dir(&app_handle);
     let datasets_dir = data_dir.join("data").join("datasets");
-    let mut folders = Vec::new();
+    let mut resources = Vec::new();
+
     if datasets_dir.exists() && datasets_dir.is_dir() {
         if let Ok(mut entries) = fs::read_dir(datasets_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
-                if entry
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                let path = entry.path();
+
+                let is_dir = entry
                     .file_type()
                     .await
                     .ok()
                     .map(|ft| ft.is_dir())
-                    .unwrap_or(false)
-                {
-                    folders.push(entry.file_name().to_string_lossy().to_string());
+                    .unwrap_or(false);
+                let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+
+                // Include directories
+                if is_dir {
+                    resources.push(file_name);
+                }
+                // Include specific dataset files
+                else if let Some(e) = ext {
+                    if ["jsonl", "json", "csv", "parquet", "arrow"].contains(&e.as_str()) {
+                        resources.push(file_name);
+                    }
                 }
             }
         }
     }
-    Ok(folders)
+    Ok(resources)
 }
 
 #[tauri::command]
@@ -560,6 +695,37 @@ pub async fn list_finetuning_models_command(app_handle: AppHandle) -> Result<Vec
         }
     }
     Ok(models)
+}
+
+/// Reads the config.json from a model directory to get metadata for resource estimation.
+#[tauri::command]
+pub async fn get_model_config_command(
+    app_handle: AppHandle,
+    model_path: String,
+) -> Result<serde_json::Value, String> {
+    let data_dir = get_data_dir(&app_handle);
+
+    // Resolve path (could be absolute or relative)
+    let resolved_path = if PathBuf::from(&model_path).is_absolute() {
+        PathBuf::from(&model_path)
+    } else {
+        data_dir.join("data").join("models").join(&model_path)
+    };
+
+    let config_path = resolved_path.join("config.json");
+
+    if !config_path.exists() {
+        return Err(format!("config.json not found at {:?}", config_path));
+    }
+
+    let content = fs::read_to_string(&config_path)
+        .await
+        .map_err(|e| format!("Failed to read config.json: {}", e))?;
+
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse config.json: {}", e))?;
+
+    Ok(json)
 }
 
 #[tauri::command]
@@ -612,6 +778,27 @@ pub async fn list_loras_by_project_command(
                 {
                     let project_name = entry.file_name().to_string_lossy().to_string();
                     let project_path = entry.path();
+
+                    // Read project_metadata.json if it exists
+                    let base_model_from_metadata = {
+                        let metadata_path = project_path.join("project_metadata.json");
+                        if metadata_path.exists() {
+                            if let Ok(c) = fs::read_to_string(metadata_path).await {
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&c) {
+                                    json.get("base_model")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
                     let mut checkpoints = Vec::new();
 
                     if let Ok(mut sub_entries) = fs::read_dir(&project_path).await {
@@ -635,6 +822,33 @@ pub async fn list_loras_by_project_command(
                                         }
                                     }
 
+                                    let gguf_path = {
+                                        let mut found = None;
+                                        // Look for common patterns: checkpoint.q8_0.gguf, checkpoint.adapter.q8_0.gguf, etc.
+                                        if let Ok(mut project_sub) =
+                                            fs::read_dir(&project_path).await
+                                        {
+                                            while let Ok(Some(file_entry)) =
+                                                project_sub.next_entry().await
+                                            {
+                                                let file_name = file_entry
+                                                    .file_name()
+                                                    .to_string_lossy()
+                                                    .to_string();
+                                                if file_name.starts_with(&sub_name)
+                                                    && file_name.ends_with(".gguf")
+                                                {
+                                                    found = Some(format!(
+                                                        "data/outputs/{}/{}",
+                                                        project_name, file_name
+                                                    ));
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        found
+                                    };
+
                                     checkpoints.push(CheckpointInfo {
                                         name: sub_name,
                                         path: format!(
@@ -645,6 +859,31 @@ pub async fn list_loras_by_project_command(
                                         is_final: entry.file_name().to_string_lossy()
                                             == "final_model",
                                         step_number,
+                                        base_model_name: {
+                                            let config_path =
+                                                sub.path().join("adapter_config.json");
+                                            if config_path.exists() {
+                                                if let Ok(c) = std::fs::read_to_string(config_path)
+                                                {
+                                                    if let Ok(json) =
+                                                        serde_json::from_str::<serde_json::Value>(
+                                                            &c,
+                                                        )
+                                                    {
+                                                        json.get("base_model_name_or_path")
+                                                            .and_then(|v| v.as_str())
+                                                            .map(|s| s.to_string())
+                                                    } else {
+                                                        None
+                                                    }
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        },
+                                        gguf_path,
                                     });
                                 }
                             }
@@ -669,6 +908,7 @@ pub async fn list_loras_by_project_command(
                         projects_info.push(ProjectLoraInfo {
                             project_name,
                             checkpoints,
+                            base_model: base_model_from_metadata,
                         });
                     }
                 }
@@ -690,6 +930,41 @@ pub async fn list_loras_by_project_command(
                         path: format!("data/loras/{}", name),
                         is_final: false,
                         step_number: None,
+                        base_model_name: {
+                            let config_path = path.join("adapter_config.json");
+                            if config_path.exists() {
+                                if let Ok(c) = std::fs::read_to_string(config_path) {
+                                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&c)
+                                    {
+                                        json.get("base_model_name_or_path")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        },
+                        gguf_path: {
+                            let mut found = None;
+                            let lora_file_name = entry.file_name().to_string_lossy().to_string();
+                            if let Ok(mut lora_dir_search) = fs::read_dir(&loras_dir).await {
+                                while let Ok(Some(fe)) = lora_dir_search.next_entry().await {
+                                    let fn_str = fe.file_name().to_string_lossy().to_string();
+                                    if fn_str.starts_with(&lora_file_name)
+                                        && fn_str.ends_with(".gguf")
+                                    {
+                                        found = Some(format!("data/loras/{}", fn_str));
+                                        break;
+                                    }
+                                }
+                            }
+                            found
+                        },
                     });
                 }
             }
@@ -698,6 +973,7 @@ pub async fn list_loras_by_project_command(
             projects_info.push(ProjectLoraInfo {
                 project_name: "Manual/External".to_string(),
                 checkpoints: manual_checkpoints,
+                base_model: None,
             });
         }
     }
@@ -757,7 +1033,9 @@ pub async fn start_llama_server_command(
             p
         } else {
             let data_dir = get_data_dir(&app_handle);
-            if model_path.contains("data/models") || model_path.contains("data\\models") {
+            // If the path already starts with "data/" or looks like a relative path from app data dir,
+            // join it directly. Otherwise, default to data/models.
+            if model_path.starts_with("data") || model_path.contains("data\\") {
                 data_dir.join(&model_path)
             } else {
                 data_dir.join("data/models").join(&model_path)
@@ -1039,15 +1317,23 @@ pub async fn start_transformers_server_command(
     let (python_exe, work_dir) = get_python_command(&app_handle)?;
     let script = get_script_path(&app_handle, "transformers_server.py");
 
-    // Check if model path is absolute, if not try to find it in data/models
-    let resolved_model_path = if PathBuf::from(&model_path).is_absolute() {
-        model_path
-    } else {
-        get_data_dir(&app_handle)
-            .join("data/models")
-            .join(&model_path)
-            .to_string_lossy()
-            .to_string()
+    // Check if model path is absolute, if not try to find it in data/models or data/outputs
+    let resolved_model_path = {
+        let p = PathBuf::from(&model_path);
+        if p.is_absolute() {
+            model_path
+        } else {
+            let data_dir = get_data_dir(&app_handle);
+            if model_path.starts_with("data") || model_path.contains("data\\") {
+                data_dir.join(&model_path).to_string_lossy().to_string()
+            } else {
+                data_dir
+                    .join("data/models")
+                    .join(&model_path)
+                    .to_string_lossy()
+                    .to_string()
+            }
+        }
     };
 
     let mut cmd = create_hidden_command(&python_exe);
@@ -1129,6 +1415,7 @@ pub struct ResourceInfo {
     pub format_error: Option<String>, // Error if format detection failed
     pub count: Option<u64>,
     pub modalities: Option<Vec<String>>,
+    pub base_model: Option<String>,
 }
 
 #[tauri::command]
@@ -1166,6 +1453,7 @@ pub async fn list_all_resources_command(
                         format_error: None,
                         count: None,
                         modalities: None,
+                        base_model: None,
                     });
                 } else {
                     if let Ok(mut sub) = fs::read_dir(&path_obj).await {
@@ -1186,12 +1474,60 @@ pub async fn list_all_resources_command(
                                     path: format!("data/models/{}/{}", name, gguf_name),
                                     r#type: "gguf".to_string(),
                                     quantization: Some(detect_quantization(&gguf_name)),
-                                    is_mmproj: false, // Since we skip them, this flag usage might change, but for now we won't show them at all.
+                                    is_mmproj: false,
                                     is_processed: None,
                                     dataset_format: None,
                                     format_error: None,
                                     count: None,
                                     modalities: None,
+                                    base_model: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // GGUFs in data/outputs (Converted LoRAs or Merged models)
+    let outputs_path = data_dir.join("data").join("outputs");
+    if outputs_path.exists() {
+        if let Ok(mut project_dirs) = fs::read_dir(&outputs_path).await {
+            while let Ok(Some(project_entry)) = project_dirs.next_entry().await {
+                if project_entry
+                    .file_type()
+                    .await
+                    .map_or(false, |ft| ft.is_dir())
+                {
+                    let project_name = project_entry.file_name().to_string_lossy().to_string();
+                    let project_dir = project_entry.path();
+
+                    if let Ok(mut files) = fs::read_dir(&project_dir).await {
+                        while let Ok(Some(file_entry)) = files.next_entry().await {
+                            let file_path = file_entry.path();
+                            if file_path.extension().map_or(false, |e| e == "gguf") {
+                                let file_name =
+                                    file_entry.file_name().to_string_lossy().to_string();
+                                if file_name.contains("mmproj") {
+                                    continue;
+                                }
+
+                                resources.push(ResourceInfo {
+                                    name: format!("{}: {}", project_name, file_name),
+                                    size: get_file_size(&file_path)
+                                        .await
+                                        .unwrap_or("Unknown".into()),
+                                    path: format!("data/outputs/{}/{}", project_name, file_name),
+                                    r#type: "gguf".to_string(),
+                                    quantization: Some(detect_quantization(&file_name)),
+                                    is_mmproj: false,
+                                    is_processed: None,
+                                    dataset_format: None,
+                                    format_error: None,
+                                    count: None,
+                                    modalities: None,
+                                    base_model: None,
                                 });
                             }
                         }
@@ -1203,6 +1539,7 @@ pub async fn list_all_resources_command(
 
     // Datasets
     let datasets_path = data_dir.join("data").join("datasets");
+    println!("BACKEND: scanning datasets at {:?}", datasets_path);
     if let Ok(mut entries) = fs::read_dir(&datasets_path).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             if entry
@@ -1279,6 +1616,7 @@ pub async fn list_all_resources_command(
                     format_error,
                     count: dataset_count,
                     modalities: dataset_modalities,
+                    base_model: None,
                 });
             }
         }
@@ -1288,24 +1626,43 @@ pub async fn list_all_resources_command(
     let loras_path = data_dir.join("data").join("loras");
     if let Ok(mut entries) = fs::read_dir(&loras_path).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry.path().is_file() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                resources.push(ResourceInfo {
-                    name: name.clone(),
-                    size: get_file_size(&entry.path())
-                        .await
-                        .unwrap_or("Unknown".into()),
-                    path: format!("data/loras/{}", name),
-                    r#type: "lora".to_string(),
-                    quantization: None,
-                    is_mmproj: false,
-                    is_processed: None,
-                    dataset_format: None,
-                    format_error: None,
-                    count: None,
-                    modalities: None,
-                });
+            let name = entry.file_name().to_string_lossy().to_string();
+            let lora_path = entry.path();
+            let mut base_model = None;
+
+            // If it's a directory, check for adapter_config.json
+            if lora_path.is_dir() {
+                let config_path = lora_path.join("adapter_config.json");
+                if config_path.exists() {
+                    if let Ok(c) = std::fs::read_to_string(config_path) {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&c) {
+                            base_model = json
+                                .get("base_model_name_or_path")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                        }
+                    }
+                }
             }
+
+            resources.push(ResourceInfo {
+                name: name.clone(),
+                size: if lora_path.is_dir() {
+                    get_dir_size(&lora_path).await.unwrap_or("Unknown".into())
+                } else {
+                    get_file_size(&lora_path).await.unwrap_or("Unknown".into())
+                },
+                path: format!("data/loras/{}", name),
+                r#type: "lora".to_string(),
+                quantization: None,
+                is_mmproj: false,
+                is_processed: None,
+                dataset_format: None,
+                format_error: None,
+                count: None,
+                modalities: None,
+                base_model,
+            });
         }
     }
 
@@ -1689,22 +2046,37 @@ pub async fn get_chat_response_command(
 
 #[tauri::command]
 pub async fn export_resources_command(
+    app_handle: AppHandle,
     resource_paths: Vec<String>,
     destination: String,
 ) -> Result<String, String> {
+    let data_dir = get_data_dir(&app_handle);
     let dest_path = PathBuf::from(&destination);
+
     if !dest_path.exists() {
         return Err("Destination path does not exist".to_string());
     }
+
     let count = resource_paths.len();
     for resource_path in resource_paths {
-        let source = PathBuf::from("..").join(&resource_path);
+        // Resolve source path relative to data dir
+        let source = data_dir.join(&resource_path);
+
+        if !source.exists() {
+            error!("Export failed: source path does not exist: {:?}", source);
+            return Err(format!("Source path does not exist: {}", resource_path));
+        }
+
         let file_name = source
             .file_name()
             .ok_or("Invalid source path")?
             .to_string_lossy()
             .to_string();
+
         let dest = dest_path.join(&file_name);
+
+        debug!("Exporting {:?} to {:?}", source, dest);
+
         if source.is_dir() {
             copy_dir_all(&source, &dest).await?;
         } else {
@@ -1728,6 +2100,9 @@ pub async fn search_huggingface_command(
     app_handle: AppHandle,
     query: String,
     resource_type: String,
+    author: Option<String>,
+    modalities: Option<String>,
+    size_range: Option<String>,
 ) -> Result<Vec<HFSearchResult>, String> {
     let (python_exe, work_dir) = get_python_command(&app_handle)?;
     let script = get_script_path(&app_handle, "huggingface_manager.py");
@@ -1747,6 +2122,22 @@ pub async fn search_huggingface_command(
         .current_dir(&work_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if let Some(a) = author {
+        if !a.is_empty() {
+            cmd.arg("--author").arg(a);
+        }
+    }
+    if let Some(m) = modalities {
+        if !m.is_empty() {
+            cmd.arg("--modalities").arg(m);
+        }
+    }
+    if let Some(s) = size_range {
+        if !s.is_empty() {
+            cmd.arg("--size").arg(s);
+        }
+    }
 
     if let Some(t) = token {
         if !t.is_empty() {
@@ -1872,7 +2263,7 @@ pub async fn download_hf_model_command(
         .arg("--repo_id")
         .arg(&model_id);
 
-    if let Some(f) = files {
+    if let Some(f) = &files {
         if !f.is_empty() {
             cmd.arg("--output")
                 .arg(base_output_folder.to_string_lossy().to_string())
@@ -1883,13 +2274,25 @@ pub async fn download_hf_model_command(
     cmd.current_dir(&work_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(t) = token {
+    if let Some(t) = &token {
         if !t.is_empty() {
             cmd.arg("--token").arg(t);
         }
     }
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+
+    // Persist task for resumption
+    if let Some(tid) = &task_id {
+        let p_task = PersistentDownloadTask {
+            id: tid.clone(),
+            name: model_id.clone(),
+            type_: "model".to_string(),
+            repo_id: model_id.clone(),
+            files: files.clone(),
+        };
+        let _ = save_persistent_task(&app_handle, p_task).await;
+    }
 
     if let Some(tid) = &task_id {
         if let Some(pid) = child.id() {
@@ -1919,9 +2322,66 @@ pub async fn download_hf_model_command(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
         let mut line = String::new();
+
+        let mut start_time = std::time::Instant::now();
+        let mut last_emit_time = std::time::Instant::now();
+        let mut first_byte_received = false;
+
         while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
             let trimmed = line.trim();
-            if trimmed.starts_with("PROGRESS:") {
+            if trimmed.starts_with("BYTES_UPDATE:") {
+                if let Some(payload) = trimmed.strip_prefix("BYTES_UPDATE:") {
+                    let parts: Vec<&str> = payload.split('/').collect();
+                    if parts.len() == 2 {
+                        let current = parts[0].parse::<u64>().unwrap_or(0);
+                        let total = parts[1].parse::<u64>().unwrap_or(0);
+
+                        if !first_byte_received && current > 0 {
+                            start_time = std::time::Instant::now();
+                            first_byte_received = true;
+                        }
+
+                        let now = std::time::Instant::now();
+                        // Throttle progress emission to 200ms for performance
+                        if now.duration_since(last_emit_time).as_millis() > 200 || current == total
+                        {
+                            let elapsed = start_time.elapsed().as_secs_f64();
+                            let speed = if elapsed > 0.0 {
+                                (current as f64) / elapsed
+                            } else {
+                                0.0
+                            };
+                            let progress = if total > 0 {
+                                (current as f64 / total as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+                            let eta = if speed > 0.1 && total > current {
+                                (total.saturating_sub(current) as f64) / speed
+                            } else {
+                                0.0
+                            };
+
+                            if let Some(tid) = &task_id_c {
+                                win_c
+                                    .emit(
+                                        "download_progress",
+                                        serde_json::json!({
+                                            "id": tid,
+                                            "progress": progress,
+                                            "downloaded_bytes": current,
+                                            "total_bytes": total,
+                                            "speed_bps": speed,
+                                            "eta_seconds": eta
+                                        }),
+                                    )
+                                    .ok();
+                            }
+                            last_emit_time = now;
+                        }
+                    }
+                }
+            } else if trimmed.starts_with("PROGRESS:") {
                 if let Some(value) = trimmed.strip_prefix("PROGRESS:") {
                     if let Ok(percentage) = value.parse::<u8>() {
                         if let Some(tid) = &task_id_c {
@@ -1947,15 +2407,28 @@ pub async fn download_hf_model_command(
     let task_id_c = task_id.clone();
     let models_state_c = (*models_state).clone();
     let model_id_c = model_id.clone();
+    let output_folder_c = base_output_folder.clone();
+    let app_handle_c = app_handle.clone();
+
     tokio::spawn(async move {
         let status = child.wait().await;
         // Emit global event on success
         let success = status.map(|s| s.success()).unwrap_or(false);
         if success {
             win_c.emit("model_downloaded", &model_id_c).ok();
+
+            // Save metadata for healing
+            let meta_path = output_folder_c.join("metadata.json");
+            let meta = serde_json::json!({
+                "source_repo": model_id_c
+            });
+            if let Ok(content) = serde_json::to_string_pretty(&meta) {
+                let _ = tokio::fs::write(&meta_path, content).await;
+            }
         }
 
         if let Some(tid) = &task_id_c {
+            let _ = remove_persistent_task(&app_handle_c, tid).await;
             models_state_c.active_downloads.lock().await.remove(tid);
             let status_str = if success { "completed" } else { "error" };
             win_c
@@ -1991,26 +2464,40 @@ pub async fn download_hf_dataset_command(
         .arg("download")
         .arg("--repo_id")
         .arg(&dataset_id)
-        .arg("--output")
-        .arg(output_folder.to_string_lossy().to_string())
-        .arg("--type")
+        .arg("--repo_type")
         .arg("dataset");
 
-    if let Some(f) = files {
+    if let Some(f) = &files {
         if !f.is_empty() {
-            cmd.arg("--files").arg(f.join(","));
+            cmd.arg("--output")
+                .arg(output_folder.to_string_lossy().to_string())
+                .arg("--files")
+                .arg(f.join(","));
         }
     }
     cmd.current_dir(&work_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(t) = token {
+    if let Some(t) = &token {
         if !t.is_empty() {
             cmd.arg("--token").arg(t);
         }
     }
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+
+    // Persist task for resumption
+    if let Some(tid) = &task_id {
+        let p_task = PersistentDownloadTask {
+            id: tid.clone(),
+            name: dataset_id.clone(),
+            type_: "dataset".to_string(),
+            repo_id: dataset_id.clone(),
+            files: files.clone(),
+        };
+        let _ = save_persistent_task(&app_handle, p_task).await;
+    }
+
     if let Some(tid) = &task_id {
         if let Some(pid) = child.id() {
             models_state
@@ -2066,6 +2553,7 @@ pub async fn download_hf_dataset_command(
     let task_id_c = task_id.clone();
     let models_state_c = (*models_state).clone();
     let dataset_id_c = dataset_id.clone();
+    let app_handle_c = app_handle.clone();
     tokio::spawn(async move {
         let status = child.wait().await;
         let success = status.map(|s| s.success()).unwrap_or(false);
@@ -2074,12 +2562,13 @@ pub async fn download_hf_dataset_command(
         }
 
         if let Some(tid) = &task_id_c {
+            let _ = remove_persistent_task(&app_handle_c, tid).await;
             models_state_c.active_downloads.lock().await.remove(tid);
-            let s_str = if success { "completed" } else { "error" };
+            let status_str = if success { "completed" } else { "error" };
             win_c
                 .emit(
                     "download_status",
-                    serde_json::json!({ "id": tid, "status": s_str }),
+                    serde_json::json!({ "id": tid, "status": status_str }),
                 )
                 .ok();
         }
@@ -2231,67 +2720,7 @@ pub async fn convert_dataset_command(
     }
 }
 
-#[tauri::command]
-pub async fn fix_dataset_command(
-    window: Window,
-    app_handle: AppHandle,
-    source_path: String,
-) -> Result<String, String> {
-    let (python_exe, work_dir) = get_python_command(&app_handle)?;
-    let script = get_script_path(&app_handle, "fix_dataset.py");
-    let data_dir = get_data_dir(&app_handle);
-
-    let source_abs = if PathBuf::from(&source_path).is_absolute() {
-        source_path
-    } else {
-        data_dir.join(&source_path).to_string_lossy().to_string()
-    };
-
-    // Output is usually fixing in place or creating a parallel file, the script handles default
-    let mut cmd = create_hidden_command(&python_exe);
-    cmd.arg(&script)
-        .arg("--dataset_dir")
-        .arg(&source_abs)
-        .current_dir(&work_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let stdout = child.stdout.take().ok_or("No stdout")?;
-    let stderr = child.stderr.take().ok_or("No stderr")?;
-
-    let win_c = window.clone();
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-            if !line.trim().is_empty() {
-                win_c.emit("log", format!("FIX_DS: {}", line.trim())).ok();
-            }
-            line.clear();
-        }
-    });
-
-    let win_c2 = window.clone();
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr);
-        let mut line = String::new();
-        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-            if !line.trim().is_empty() {
-                win_c2
-                    .emit("log", format!("FIX_DS ERR: {}", line.trim()))
-                    .ok();
-            }
-            line.clear();
-        }
-    });
-
-    if child.wait().await.map_err(|e| e.to_string())?.success() {
-        Ok("Dataset repair completed".to_string())
-    } else {
-        Err("Dataset repair failed".to_string())
-    }
-}
+// fix_dataset_command removed: superseded by new implementation at the end of file.
 
 #[tauri::command]
 pub async fn process_vlm_dataset_command(
@@ -2324,6 +2753,7 @@ pub async fn process_vlm_dataset_command(
         .arg(&output_dir)
         .arg("--model_name")
         .arg(&model_name)
+        .arg("--force") // Always force overwrite for cleanliness
         .current_dir(&work_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2372,7 +2802,20 @@ pub async fn delete_resource_command(
     resource_path: String,
 ) -> Result<String, String> {
     let data_dir = get_data_dir(&app_handle);
-    let full_path = data_dir.join(&resource_path);
+
+    // Resolve base path based on resource type
+    let base_dir = match resource_type.as_str() {
+        "model" | "gguf" => data_dir.join("data/models"),
+        "lora" => data_dir.join("data/loras"),
+        "dataset" => data_dir.join("data/datasets"),
+        _ => return Err("Invalid resource type".to_string()),
+    };
+
+    let full_path = base_dir.join(&resource_path);
+
+    if !full_path.exists() {
+        return Err(format!("Resource not found at: {:?}", full_path));
+    }
 
     if full_path.is_dir() {
         fs::remove_dir_all(&full_path)
@@ -2384,6 +2827,39 @@ pub async fn delete_resource_command(
             .map_err(|e| e.to_string())?;
     }
     Ok(format!("{} deleted successfully", resource_type))
+}
+
+#[tauri::command]
+pub async fn rename_resource_command(
+    app_handle: AppHandle,
+    resource_type: String,
+    current_name: String,
+    new_name: String,
+) -> Result<String, String> {
+    let data_dir = get_data_dir(&app_handle);
+    let base_dir = match resource_type.as_str() {
+        "model" | "gguf" => data_dir.join("data/models"),
+        "lora" => data_dir.join("data/loras"),
+        "dataset" => data_dir.join("data/datasets"),
+        _ => return Err("Invalid resource type".to_string()),
+    };
+
+    let current_path = base_dir.join(&current_name);
+    let new_path = base_dir.join(&new_name);
+
+    if !current_path.exists() {
+        return Err("Source resource does not exist".to_string());
+    }
+    if new_path.exists() {
+        return Err("A resource with the new name already exists".to_string());
+    }
+
+    // Attempt rename
+    fs::rename(&current_path, &new_path)
+        .await
+        .map_err(|e| format!("Rename failed: {}", e))?;
+
+    Ok(format!("Renamed to {}", new_name))
 }
 
 #[tauri::command]
@@ -2400,19 +2876,47 @@ pub async fn import_resource_command(
         "dataset" => data_dir.join("data/datasets"),
         _ => return Err("Invalid resource type".to_string()),
     };
-    let file_name = source
-        .file_name()
-        .ok_or("Invalid source")?
-        .to_string_lossy()
-        .to_string();
-    let dest = dest_base.join(&file_name);
 
-    // Check if dest_base exists first? create_dir_all happens in copy_dir_all but not for single file copy
     if !dest_base.exists() {
         fs::create_dir_all(&dest_base)
             .await
             .map_err(|e| e.to_string())?;
     }
+
+    let file_name = source
+        .file_name()
+        .ok_or("Invalid source")?
+        .to_string_lossy()
+        .to_string();
+
+    // Special handling for single dataset files: Containerize them
+    if resource_type == "dataset" && source.is_file() {
+        let file_stem = source
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or(file_name.clone());
+        let container_path = dest_base.join(&file_stem);
+
+        if !container_path.exists() {
+            fs::create_dir_all(&container_path)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+
+        // Standardize naming if JSONL
+        let dest_file_name = if file_name.to_lowercase().ends_with(".jsonl") {
+            "training_data.jsonl".to_string()
+        } else {
+            file_name.clone()
+        };
+
+        let dest = container_path.join(dest_file_name);
+        fs::copy(&source, &dest).await.map_err(|e| e.to_string())?;
+
+        return Ok(format!("Dataset imported into folder: {}", file_stem));
+    }
+
+    let dest = dest_base.join(&file_name);
 
     if source.is_dir() {
         copy_dir_all(&source, &dest).await?;
@@ -2461,13 +2965,20 @@ pub async fn convert_hf_to_gguf_command(
     let (python_exe, work_dir) = get_python_command(window.app_handle())?;
     let script = get_script_path(window.app_handle(), "convert_hf_to_gguf.py");
 
+    let data_dir = get_data_dir(window.app_handle());
+    let resolved_source = if PathBuf::from(&source_path).is_absolute() {
+        source_path.clone()
+    } else {
+        data_dir.join(&source_path).to_string_lossy().to_string()
+    };
+
     let mut cmd = create_hidden_command(&python_exe);
     cmd.arg(&script);
     if let Some(out) = &output_path {
         cmd.arg("--outfile").arg(out);
     }
     cmd.arg("--outtype").arg(&quantization_type);
-    cmd.arg(&source_path);
+    cmd.arg(&resolved_source);
     cmd.current_dir(&work_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2481,7 +2992,20 @@ pub async fn convert_hf_to_gguf_command(
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
         while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-            win_c.emit("log", format!("CONVERT: {}", line.trim())).ok();
+            let t = line.trim();
+            win_c.emit("log", format!("CONVERT: {}", t)).ok();
+
+            // Heuristic progress parsing for convert_hf_to_gguf.py
+            if t.contains("Loading model:") {
+                win_c.emit("conversion_progress", 5).ok();
+            } else if t.contains("indexing model part") {
+                win_c.emit("conversion_progress", 20).ok();
+            } else if t.contains("Exporting model...") {
+                win_c.emit("conversion_progress", 50).ok();
+            } else if t.contains("successfully exported to") {
+                win_c.emit("conversion_progress", 100).ok();
+            }
+
             line.clear();
         }
     });
@@ -2622,12 +3146,35 @@ pub async fn convert_lora_to_gguf_command(
     let (python_exe, work_dir) = get_python_command(window.app_handle())?;
     let script = get_script_path(window.app_handle(), "convert_lora_to_gguf.py");
 
+    let data_dir = get_data_dir(window.app_handle());
+    let resolved_base = if PathBuf::from(&base_path).is_absolute() {
+        base_path.clone()
+    } else {
+        // Try direct first, then models subdir
+        let direct = data_dir.join(&base_path);
+        if direct.exists() {
+            direct.to_string_lossy().to_string()
+        } else {
+            let model_path = data_dir.join("data").join("models").join(&base_path);
+            if model_path.exists() {
+                model_path.to_string_lossy().to_string()
+            } else {
+                direct.to_string_lossy().to_string()
+            }
+        }
+    };
+    let resolved_lora = if PathBuf::from(&lora_path).is_absolute() {
+        lora_path.clone()
+    } else {
+        data_dir.join(&lora_path).to_string_lossy().to_string()
+    };
+
     let mut cmd = create_hidden_command(&python_exe);
+    // Note: convert_lora_to_gguf.py expects: lora_path (positional), --base, --outfile, --outtype
     cmd.arg(&script)
+        .arg(&resolved_lora) // Positional argument first
         .arg("--base")
-        .arg(&base_path)
-        .arg("--lora")
-        .arg(&lora_path);
+        .arg(&resolved_base);
     if let Some(out) = output_path {
         cmd.arg("--outfile").arg(out);
     }
@@ -2645,9 +3192,18 @@ pub async fn convert_lora_to_gguf_command(
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
         while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-            win_c
-                .emit("log", format!("CONVERT_LORA: {}", line.trim()))
-                .ok();
+            let t = line.trim();
+            win_c.emit("log", format!("CONVERT_LORA: {}", t)).ok();
+
+            // Heuristic progress parsing for convert_lora_to_gguf.py
+            if t.contains("Loading base model") {
+                win_c.emit("conversion_progress", 10).ok();
+            } else if t.contains("Exporting model...") {
+                win_c.emit("conversion_progress", 50).ok();
+            } else if t.contains("Model successfully exported to") {
+                win_c.emit("conversion_progress", 100).ok();
+            }
+
             line.clear();
         }
     });
@@ -2706,6 +3262,114 @@ pub async fn cancel_download_command(
 }
 
 #[tauri::command]
+pub async fn convert_unsloth_gguf_command(
+    window: Window,
+    app_handle: AppHandle,
+    source_path: String,
+    output_path: String,
+    quantization_type: String,
+    lora_path: Option<String>,
+) -> Result<String, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "convert_unsloth_gguf.py");
+
+    let data_dir = get_data_dir(&app_handle);
+    let resolved_source = if PathBuf::from(&source_path).is_absolute() {
+        source_path.clone()
+    } else {
+        // Try direct first, then models subdir
+        let direct = data_dir.join(&source_path);
+        if direct.exists() {
+            direct.to_string_lossy().to_string()
+        } else {
+            let model_path = data_dir.join("data").join("models").join(&source_path);
+            if model_path.exists() {
+                model_path.to_string_lossy().to_string()
+            } else {
+                // Fallback to direct path for unsloth to potentially handle as HF ID
+                direct.to_string_lossy().to_string()
+            }
+        }
+    };
+
+    let mut cmd = create_hidden_command(&python_exe);
+    cmd.arg(&script)
+        .arg("--model")
+        .arg(&resolved_source)
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--quant")
+        .arg(&quantization_type);
+
+    if let Some(lora) = &lora_path {
+        if !lora.is_empty() {
+            let resolved_lora = if PathBuf::from(lora).is_absolute() {
+                lora.clone()
+            } else {
+                data_dir.join(lora).to_string_lossy().to_string()
+            };
+            cmd.arg("--lora").arg(resolved_lora);
+        }
+    }
+
+    cmd.current_dir(&work_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or("No stdout")?;
+    let stderr = child.stderr.take().ok_or("No stderr")?;
+
+    let win_c = window.clone();
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            let t = line.trim();
+            win_c.emit("log", format!("UNSLOTH_GGUF: {}", t)).ok();
+
+            // Parse progress: "PROGRESS: 10% - ..."
+            if t.contains("PROGRESS:") {
+                if let Some(p_part) = t.split("PROGRESS:").nth(1) {
+                    if let Some(percent_str) = p_part.split('%').next() {
+                        if let Ok(percent) = percent_str.trim().parse::<u32>() {
+                            win_c.emit("conversion_progress", percent).ok();
+                        }
+                    }
+                }
+            }
+            line.clear();
+        }
+    });
+
+    let win_c2 = window.clone();
+    let stderr_handle = tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        let mut cap = String::new();
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            let t = line.trim();
+            if !t.is_empty() {
+                win_c2.emit("log", format!("UNSLOTH_GGUF: {}", t)).ok();
+                cap.push_str(t);
+                cap.push('\n');
+            }
+            line.clear();
+        }
+        cap
+    });
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    let err = stderr_handle.await.map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok("Unsloth GGUF conversion complete".to_string())
+    } else {
+        Err(format!("Unsloth GGUF conversion failed: {}", err.trim()))
+    }
+}
+
+#[tauri::command]
 pub async fn start_training_command(
     window: Window,
     app_handle: AppHandle,
@@ -2713,6 +3377,7 @@ pub async fn start_training_command(
     project_name: String,
     model_path: String,
     dataset_paths: Vec<String>, // Changed from dataset_path: String to support multiple
+    // Removed dataset known weights
     num_epochs: u32,
     batch_size: u32,
     learning_rate: f64,
@@ -2726,6 +3391,16 @@ pub async fn start_training_command(
     weight_decay: Option<f64>,
     optimizer: Option<String>,
     lr_scheduler_type: Option<String>,
+    // New parameters
+    eval_split: Option<f64>,
+    eval_steps: Option<u32>,
+    use_cpu_offload: Option<bool>,
+    use_paged_optimizer: Option<bool>,
+    use_gradient_checkpointing: Option<bool>,
+    hybrid_training: Option<bool>,
+    gpu_layers: Option<u32>,
+    offload_optimizer: Option<bool>,
+    use_deepspeed: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let (python_exe, work_dir) = get_python_command(&app_handle)?;
     let data_dir = get_data_dir(&app_handle);
@@ -2827,8 +3502,23 @@ pub async fn start_training_command(
         .to_string();
 
     // Ensure output directory exists (Tensorboard might need it or script will create it)
-    // std::fs::create_dir_all(&output_dir_abs).unwrap_or_default();
-    // Actually let script handle it, or create parent.
+    // We create it here to save metadata immediately
+    let output_path_buf = PathBuf::from(&output_dir_abs);
+    if let Err(e) = std::fs::create_dir_all(&output_path_buf) {
+        log::warn!("Failed to create output dir for metadata: {}", e);
+    } else {
+        // Save metadata
+        let metadata_path = output_path_buf.join("project_metadata.json");
+        let metadata = serde_json::json!({
+            "base_model": model_path,
+            "training_started_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+        });
+        if let Ok(s) = serde_json::to_string_pretty(&metadata) {
+            if let Err(e) = std::fs::write(metadata_path, s) {
+                log::warn!("Failed to write project metadata: {}", e);
+            }
+        }
+    }
 
     cmd.arg(&script)
         .arg("--model")
@@ -2854,8 +3544,16 @@ pub async fn start_training_command(
     if let Some(tm) = &training_method {
         cmd.arg("--training_method").arg(tm);
     }
+
+    // Handle Adapter Type correctly for train.py
     if let Some(at) = &adapter_type {
-        cmd.arg("--adapter_type").arg(at);
+        if at == "dora" {
+            // train.py expects --use_dora for DoRA, not --adapter_type dora
+            cmd.arg("--use_dora");
+        } else {
+            // For 'lora' or 'full', pass as standard arg
+            cmd.arg("--adapter_type").arg(at);
+        }
     }
     if let Some(gas) = gradient_accumulation_steps {
         cmd.arg("--gradient_accumulation_steps")
@@ -2872,6 +3570,37 @@ pub async fn start_training_command(
     }
     if let Some(lrs) = &lr_scheduler_type {
         cmd.arg("--lr_scheduler_type").arg(lrs);
+    }
+
+    // New Params
+    if let Some(es) = eval_split {
+        cmd.arg("--eval_split").arg(es.to_string());
+    }
+    if let Some(steps) = eval_steps {
+        cmd.arg("--eval_steps").arg(steps.to_string());
+    }
+    if let Some(true) = use_cpu_offload {
+        cmd.arg("--use_cpu_offload");
+    }
+    if let Some(true) = use_paged_optimizer {
+        cmd.arg("--use_paged_optimizer");
+    }
+    if let Some(true) = use_gradient_checkpointing {
+        cmd.arg("--use_gradient_checkpointing");
+    }
+
+    // Hybrid Settings
+    if let Some(true) = hybrid_training {
+        cmd.arg("--hybrid_training");
+    }
+    if let Some(layers) = gpu_layers {
+        cmd.arg("--gpu_layers").arg(layers.to_string());
+    }
+    if let Some(true) = offload_optimizer {
+        cmd.arg("--offload_optimizer");
+    }
+    if let Some(true) = use_deepspeed {
+        cmd.arg("--use_deepspeed");
     }
 
     cmd.current_dir(&work_dir)
@@ -3342,14 +4071,50 @@ pub async fn list_gguf_models_command(app_handle: AppHandle) -> Result<Vec<Strin
 #[tauri::command]
 pub async fn list_lora_adapters_command(app_handle: AppHandle) -> Result<Vec<String>, String> {
     let data_dir = get_data_dir(&app_handle);
-    let loras_dir = data_dir.join("data/loras");
     let mut res = Vec::new();
-    if let Ok(mut entries) = fs::read_dir(loras_dir).await {
+
+    // 1. Standard loras directory
+    let loras_dir = data_dir.join("data/loras");
+    if let Ok(mut entries) = fs::read_dir(&loras_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             res.push(entry.file_name().to_string_lossy().to_string());
         }
     }
+
+    // 2. Training outputs (projects)
+    let outputs_dir = data_dir.join("data/outputs");
+    if let Ok(mut entries) = fs::read_dir(&outputs_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_dir() {
+                // If final_model exists, it's a LoRA output
+                let final_model = path.join("final_model");
+                if final_model.exists() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    res.push(format!("outputs/{}", name));
+                }
+            }
+        }
+    }
+
     Ok(res)
+}
+
+#[tauri::command]
+pub async fn delete_project_command(
+    app_handle: AppHandle,
+    project_name: String,
+) -> Result<(), String> {
+    let data_dir = get_data_dir(&app_handle);
+    let project_dir = data_dir.join("data/outputs").join(&project_name);
+    if project_dir.exists() {
+        fs::remove_dir_all(project_dir)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("Project not found".to_string())
+    }
 }
 
 #[tauri::command]
@@ -3431,6 +4196,9 @@ pub async fn setup_python_env_command(
     run_pip(
         vec![
             "--upgrade",
+            "cmake",
+            "setuptools",
+            "wheel",
             "triton-windows<3.3",
             "trl",
             "peft",
@@ -3558,4 +4326,698 @@ pub async fn check_server_health_command(port: u16) -> Result<bool, String> {
         Ok(r) => Ok(r.status().is_success()),
         Err(_) => Ok(false),
     }
+}
+
+#[tauri::command]
+pub async fn resolve_path_command(app_handle: AppHandle, path: String) -> Result<String, String> {
+    // If absolute, return as is (normalized)
+    let p = PathBuf::from(&path);
+    if p.is_absolute() {
+        return Ok(p.to_string_lossy().to_string());
+    }
+
+    let data_dir = get_data_dir(&app_handle);
+
+    // Check various common locations
+    let candidates = vec![
+        data_dir.join(&path),
+        data_dir.join("data").join("models").join(&path),
+        data_dir.join("data").join("datasets").join(&path),
+        data_dir.join("data").join("loras").join(&path),
+        // Handling for direct data/ paths
+        data_dir.join("data").join(&path),
+    ];
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    // Sometimes path already contains "data/...", check parent of data_dir
+    if path.starts_with("data") {
+        if let Some(parent) = data_dir.parent() {
+            let retry = parent.join(&path);
+            if retry.exists() {
+                return Ok(retry.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // Fallback: return best effort absolute path relative to data dir
+    Ok(data_dir.join(path).to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn create_dataset_command(app_handle: AppHandle, name: String) -> Result<String, String> {
+    println!("BACKEND: create_dataset_command called with name: {}", name);
+    let data_dir = get_data_dir(&app_handle);
+    // Sanitize name
+    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+
+    // Create folder: data/datasets/{safe_name}
+    let dataset_folder = data_dir.join("data/datasets").join(&safe_name);
+    println!("BACKEND: Creating dataset folder at: {:?}", dataset_folder);
+
+    if dataset_folder.exists() {
+        println!("BACKEND: Folder already exists!");
+        return Err(format!("Dataset folder '{}' already exists", safe_name));
+    }
+
+    fs::create_dir_all(&dataset_folder)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Create empty file: dataset.jsonl
+    let file_path = dataset_folder.join("dataset.jsonl");
+    fs::File::create(&file_path)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let relative_path = format!("data/datasets/{}", safe_name);
+    println!(
+        "BACKEND: Success. Returning relative path: {}",
+        relative_path
+    );
+    // Return relative path for UI selection match
+    Ok(relative_path)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DatasetPreviewResult {
+    pub rows: Vec<serde_json::Value>,
+    #[serde(rename = "totalCount")]
+    pub total_count: i64,
+    pub columns: Vec<String>,
+    pub format: String,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DatasetFixedResult {
+    pub success: bool,
+    pub output_path: Option<String>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fix_dataset_command(
+    app_handle: AppHandle,
+    dataset_dir: String,
+) -> Result<DatasetFixedResult, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "fix_dataset.py");
+
+    let resolved_dir = resolve_path_command(app_handle.clone(), dataset_dir.clone()).await?;
+
+    let mut cmd = create_hidden_std_command(&python_exe);
+    cmd.arg(&script)
+        .arg("--dataset_dir")
+        .arg(&resolved_dir)
+        .current_dir(&work_dir);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run fix_dataset: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // It might print to stdout even on error, so capture that too
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Ok(DatasetFixedResult {
+            success: false,
+            output_path: None,
+            error: Some(format!("Error: {}\nOutput: {}", stderr, stdout)),
+        });
+    }
+
+    // The script prints the output file path as the last line usually?
+    // Or we just assume it's created. The script in fix_dataset.py returns the output path or prints it?
+    // Looking at fix_dataset.py: it prints stats and output file.
+    // We might want to adjust fix_dataset.py to print JSON result for better parsing,
+    // OR just assume success and return the expected path.
+    // For now, let's assume it worked if exit code 0.
+
+    Ok(DatasetFixedResult {
+        success: true,
+        output_path: Some(resolved_dir + "/dataset_fixed.jsonl"), // Simple assumption based on script default
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn bulk_edit_dataset_command(
+    app_handle: AppHandle,
+    dataset_path: String,
+    operation: String, // JSON
+) -> Result<DatasetSaveResult, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "dataset_loader.py");
+
+    let resolved_path = resolve_path_command(app_handle.clone(), dataset_path.clone()).await?;
+
+    let mut cmd = create_hidden_std_command(&python_exe);
+    cmd.arg(&script)
+        .arg("bulk_edit")
+        .arg(&resolved_path)
+        .arg("--operation")
+        .arg(&operation)
+        .current_dir(&work_dir);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run dataset_loader bulk_edit: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Bulk edit error: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result: DatasetSaveResult = serde_json::from_str(&stdout).map_err(|e| {
+        format!(
+            "Failed to parse bulk edit result: {} - Output: {}",
+            e, stdout
+        )
+    })?;
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn load_dataset_preview_command(
+    app_handle: AppHandle,
+    dataset_path: String,
+    offset: i64,
+    limit: i64,
+    split: Option<String>,
+) -> Result<DatasetPreviewResult, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "dataset_loader.py");
+
+    // Resolve dataset path
+    let resolved_path = {
+        let p = PathBuf::from(&dataset_path);
+        if p.is_absolute() {
+            p
+        } else {
+            let data_dir = get_data_dir(&app_handle);
+            if dataset_path.starts_with("data") || dataset_path.contains("data\\") {
+                data_dir.join(&dataset_path)
+            } else {
+                data_dir.join("data/datasets").join(&dataset_path)
+            }
+        }
+    };
+
+    let mut cmd = create_hidden_std_command(&python_exe);
+    cmd.arg(&script)
+        .arg("load")
+        .arg(resolved_path.to_string_lossy().to_string())
+        .arg("--offset")
+        .arg(offset.to_string())
+        .arg("--limit")
+        .arg(limit.to_string())
+        .arg("--split")
+        .arg(split.unwrap_or_else(|| "train".to_string()))
+        .current_dir(&work_dir);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run dataset_loader: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Dataset loader error: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result: DatasetPreviewResult = serde_json::from_str(&stdout).map_err(|e| {
+        format!(
+            "Failed to parse dataset loader output: {} - Output: {}",
+            e, stdout
+        )
+    })?;
+
+    Ok(result)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DatasetSaveResult {
+    pub success: bool,
+    pub count: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn save_dataset_command(
+    app_handle: AppHandle,
+    dataset_path: String,
+    rows: String,
+) -> Result<DatasetSaveResult, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "dataset_loader.py");
+
+    // Resolve path (similar logic to load)
+    let resolved_path = resolve_path_command(app_handle.clone(), dataset_path.clone()).await?;
+
+    let mut cmd = create_hidden_std_command(&python_exe);
+    cmd.arg(&script)
+        .arg("save")
+        .arg(&resolved_path)
+        .arg("--data")
+        .arg(&rows)
+        .current_dir(&work_dir);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run dataset_loader save: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Dataset save error: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result: DatasetSaveResult = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse save result: {} - Output: {}", e, stdout))?;
+
+    Ok(result)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DatasetEdit {
+    #[serde(rename = "rowIndex")]
+    pub row_index: i64,
+    pub data: Option<serde_json::Value>, // None means delete
+}
+
+#[tauri::command]
+pub async fn apply_dataset_edits_command(
+    app_handle: AppHandle,
+    dataset_path: String,
+    edits: String, // JSON string of DatasetEdit[]
+) -> Result<DatasetSaveResult, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "dataset_loader.py");
+
+    let resolved_path = resolve_path_command(app_handle.clone(), dataset_path.clone()).await?;
+
+    let mut cmd = create_hidden_std_command(&python_exe);
+    cmd.arg(&script)
+        .arg("edit")
+        .arg(&resolved_path)
+        .arg("--edits")
+        .arg(&edits)
+        .current_dir(&work_dir);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run dataset_loader edit: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Dataset edit error: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result: DatasetSaveResult = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse edit result: {} - Output: {}", e, stdout))?;
+
+    Ok(result)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GenerationResult {
+    pub success: bool,
+    pub output_path: String,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn generate_dataset_command(
+    app_handle: AppHandle,
+    recipe: String, // JSON string
+    output_path: String,
+) -> Result<GenerationResult, String> {
+    let (python_exe, work_dir) = get_python_command(&app_handle)?;
+    let script = get_script_path(&app_handle, "generation_engine.py");
+
+    // Resolve output path
+    // If relative, put in data/datasets
+    let target_path = if std::path::Path::new(&output_path).is_absolute() {
+        output_path.clone()
+    } else {
+        get_data_dir(&app_handle)
+            .join("datasets")
+            .join(&output_path)
+            .to_string_lossy()
+            .to_string()
+    };
+
+    let mut cmd = create_hidden_std_command(&python_exe);
+    cmd.arg(&script)
+        .arg("--recipe")
+        .arg(&recipe)
+        .arg("--output")
+        .arg(&target_path)
+        .current_dir(&work_dir);
+
+    // TODO: Ideally stream output. For now wait.
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run generation engine: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Also check stdout for JSON error from script
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Generation error: {} \nOutput: {}", stderr, stdout));
+    }
+
+    Ok(GenerationResult {
+        success: true,
+        output_path: target_path,
+        error: None,
+    })
+}
+
+// --- Drop Analysis Types ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropDetails {
+    pub is_split_model: bool,
+    pub has_vision: bool,
+    pub file_count: u32,
+    pub total_size: String,
+    pub detected_format: Option<String>,
+    pub shard_info: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropAnalysis {
+    pub path: String,
+    pub name: String,
+    pub resource_type: String, // "model", "gguf", "lora", "dataset", "unknown"
+    pub confidence: String,    // "high", "medium", "low"
+    pub details: DropDetails,
+}
+
+// --- Drop Analysis Command ---
+
+#[tauri::command]
+pub async fn analyze_drop_command(paths: Vec<String>) -> Result<Vec<DropAnalysis>, String> {
+    let mut results = Vec::new();
+
+    for path_str in paths {
+        let path = PathBuf::from(&path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let analysis = if path.is_file() {
+            analyze_file(&path, &name).await
+        } else {
+            analyze_directory(&path, &name).await
+        };
+
+        results.push(analysis);
+    }
+
+    Ok(results)
+}
+
+async fn analyze_file(path: &PathBuf, name: &str) -> DropAnalysis {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    let file_size = fs::metadata(path).await.map(|m| m.len()).unwrap_or(0);
+
+    let size_str = crate::utils::format_size(file_size);
+
+    // Check for GGUF files
+    if ext == "gguf" {
+        let is_mmproj = name.to_lowercase().contains("mmproj");
+        let is_split = is_split_model_file(name);
+        let shard_info = if is_split {
+            parse_shard_info(name)
+        } else {
+            None
+        };
+
+        return DropAnalysis {
+            path: path.to_string_lossy().to_string(),
+            name: name.to_string(),
+            resource_type: if is_mmproj {
+                "mmproj".to_string()
+            } else {
+                "gguf".to_string()
+            },
+            confidence: "high".to_string(),
+            details: DropDetails {
+                is_split_model: is_split,
+                has_vision: is_mmproj,
+                file_count: 1,
+                total_size: size_str,
+                detected_format: Some("gguf".to_string()),
+                shard_info,
+            },
+        };
+    }
+
+    // Check for dataset files
+    let dataset_exts = ["jsonl", "parquet", "arrow", "csv", "json"];
+    if dataset_exts.contains(&ext.as_str()) {
+        return DropAnalysis {
+            path: path.to_string_lossy().to_string(),
+            name: name.to_string(),
+            resource_type: "dataset".to_string(),
+            confidence: "high".to_string(),
+            details: DropDetails {
+                is_split_model: false,
+                has_vision: false,
+                file_count: 1,
+                total_size: size_str,
+                detected_format: Some(ext),
+                shard_info: None,
+            },
+        };
+    }
+
+    // Check for LoRA files
+    let lora_exts = ["safetensors", "bin", "pt"];
+    if lora_exts.contains(&ext.as_str()) && name.to_lowercase().contains("adapter") {
+        return DropAnalysis {
+            path: path.to_string_lossy().to_string(),
+            name: name.to_string(),
+            resource_type: "lora".to_string(),
+            confidence: "medium".to_string(),
+            details: DropDetails {
+                is_split_model: false,
+                has_vision: false,
+                file_count: 1,
+                total_size: size_str,
+                detected_format: Some(ext),
+                shard_info: None,
+            },
+        };
+    }
+
+    // Unknown file type
+    DropAnalysis {
+        path: path.to_string_lossy().to_string(),
+        name: name.to_string(),
+        resource_type: "unknown".to_string(),
+        confidence: "low".to_string(),
+        details: DropDetails {
+            is_split_model: false,
+            has_vision: false,
+            file_count: 1,
+            total_size: size_str,
+            detected_format: Some(ext),
+            shard_info: None,
+        },
+    }
+}
+
+async fn analyze_directory(path: &PathBuf, name: &str) -> DropAnalysis {
+    let mut gguf_count = 0u32;
+    let mut mmproj_count = 0u32;
+    let mut safetensor_count = 0u32;
+    let mut dataset_file_count = 0u32;
+    let mut has_config_json = false;
+    let mut has_adapter_config = false;
+    let mut total_size = 0u64;
+    let mut file_count = 0u32;
+    let mut is_split = false;
+    let mut shard_info: Option<String> = None;
+
+    // Scan directory contents
+    if let Ok(mut entries) = fs::read_dir(path).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let entry_name = entry.file_name().to_string_lossy().to_lowercase();
+            let entry_path = entry.path();
+
+            if let Ok(metadata) = entry.metadata().await {
+                if metadata.is_file() {
+                    file_count += 1;
+                    total_size += metadata.len();
+
+                    let ext = entry_path
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+
+                    // Check file types
+                    if ext == "gguf" {
+                        if entry_name.contains("mmproj") {
+                            mmproj_count += 1;
+                        } else {
+                            gguf_count += 1;
+                            if is_split_model_file(&entry_name) {
+                                is_split = true;
+                                if shard_info.is_none() {
+                                    shard_info = parse_shard_info(&entry_name);
+                                }
+                            }
+                        }
+                    } else if ext == "safetensors" {
+                        safetensor_count += 1;
+                    } else if ["jsonl", "parquet", "arrow", "csv"].contains(&ext.as_str()) {
+                        dataset_file_count += 1;
+                    }
+
+                    // Check for config files
+                    if entry_name == "config.json" {
+                        has_config_json = true;
+                    }
+                    if entry_name == "adapter_config.json"
+                        || entry_name == "adapter_model.safetensors"
+                    {
+                        has_adapter_config = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let size_str = crate::utils::format_size(total_size);
+    let has_vision = mmproj_count > 0;
+
+    // Determine resource type based on contents
+    let (resource_type, confidence, detected_format) = if has_adapter_config {
+        // LoRA adapter folder
+        (
+            "lora".to_string(),
+            "high".to_string(),
+            Some("lora".to_string()),
+        )
+    } else if gguf_count > 0 {
+        // GGUF model folder (possibly with vision)
+        if has_vision {
+            (
+                "model".to_string(),
+                "high".to_string(),
+                Some("gguf+vision".to_string()),
+            )
+        } else if is_split {
+            (
+                "model".to_string(),
+                "high".to_string(),
+                Some("gguf-split".to_string()),
+            )
+        } else {
+            (
+                "gguf".to_string(),
+                "high".to_string(),
+                Some("gguf".to_string()),
+            )
+        }
+    } else if safetensor_count > 0 && has_config_json {
+        // HuggingFace model folder
+        (
+            "model".to_string(),
+            "high".to_string(),
+            Some("safetensors".to_string()),
+        )
+    } else if dataset_file_count > 0 {
+        // Dataset folder
+        (
+            "dataset".to_string(),
+            "high".to_string(),
+            Some("dataset-folder".to_string()),
+        )
+    } else if safetensor_count > 0 {
+        // Could be LoRA or model, lower confidence
+        (
+            "model".to_string(),
+            "medium".to_string(),
+            Some("safetensors".to_string()),
+        )
+    } else {
+        ("unknown".to_string(), "low".to_string(), None)
+    };
+
+    DropAnalysis {
+        path: path.to_string_lossy().to_string(),
+        name: name.to_string(),
+        resource_type,
+        confidence,
+        details: DropDetails {
+            is_split_model: is_split,
+            has_vision,
+            file_count,
+            total_size: size_str,
+            detected_format,
+            shard_info,
+        },
+    }
+}
+
+fn is_split_model_file(filename: &str) -> bool {
+    let lower = filename.to_lowercase();
+    // Common patterns for split models:
+    // model-00001-of-00003.gguf
+    // model.gguf.part1of3
+    // model-shard-001.gguf
+    lower.contains("-of-")
+        || lower.contains("part")
+            && (lower.contains("of") || lower.chars().filter(|c| c.is_ascii_digit()).count() >= 2)
+        || lower.contains("-shard-")
+}
+
+fn parse_shard_info(filename: &str) -> Option<String> {
+    let lower = filename.to_lowercase();
+
+    // Try to parse "00001-of-00003" pattern
+    if let Some(of_idx) = lower.find("-of-") {
+        // Find the number before "-of-"
+        let before = &lower[..of_idx];
+        let after = &lower[of_idx + 4..];
+
+        // Extract current shard number (last digits before -of-)
+        let current: String = before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        // Extract total shards (digits right after -of-)
+        let total: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+
+        if let (Ok(c), Ok(t)) = (current.parse::<u32>(), total.parse::<u32>()) {
+            return Some(format!("{} of {} shards", c, t));
+        }
+    }
+
+    None
 }

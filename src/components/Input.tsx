@@ -27,7 +27,7 @@ export const Input: React.FC<InputProps> = ({
                         {label}
                         {tooltip && <InfoTooltip text={tooltip} />}
                     </label>
-                    {displayValue && <span style={{ fontSize: '12px', color: '#a78bfa', fontWeight: 600 }}>{displayValue}</span>}
+                    {displayValue && <span style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 600 }}>{displayValue}</span>}
                 </div>
             )}
             <input className="input-field" {...props} />

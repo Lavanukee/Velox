@@ -34,6 +34,10 @@ export interface DownloadTask {
   progress: number; // 0-100
   status: 'pending' | 'downloading' | 'completed' | 'error' | 'cancelled';
   onCancel?: () => void; // Optional callback to cancel the download
+  downloaded_bytes?: number;
+  total_bytes?: number;
+  speed_bps?: number;
+  eta_seconds?: number;
 }
 
 export interface Resource {
@@ -49,4 +53,22 @@ export interface Resource {
   format_error?: string; // Error message if format detection failed
   count?: number; // Number of examples
   modalities?: string[]; // E.g. ["Vision", "Text"]
+  base_model?: string; // Optional path to base model for LoRAs
+}
+
+export interface Notification {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info';
+}
+
+export interface GpuInfo {
+  name: string;
+  vram_total: number;
+}
+
+export interface HardwareInfo {
+  cpu: string;
+  ram_total: number;
+  gpus: GpuInfo[];
 }

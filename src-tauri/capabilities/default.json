@@ -2,12 +2,15 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "opener:default",
     "dialog:allow-open",
     "dialog:default",
+    "drag:default",
     "shell:allow-open",
     "fs:allow-read",
     "fs:allow-write",
@@ -30,27 +33,37 @@
         },
         {
           "cmd": "python-x86_64-windows/python.exe",
-          "args": ["scripts/download_datasets.py"],
+          "args": [
+            "scripts/download_datasets.py"
+          ],
           "name": "download_datasets_script"
         },
         {
           "cmd": "python-x86_64-windows/python.exe",
-          "args": ["scripts/data_collecter.py"],
+          "args": [
+            "scripts/data_collecter.py"
+          ],
           "name": "data_collection_script"
         },
         {
           "cmd": "python-x86_64-windows/python.exe",
-          "args": ["scripts/deduplication.py"],
+          "args": [
+            "scripts/deduplication.py"
+          ],
           "name": "deduplication_script"
         },
         {
           "cmd": "python-x86_64-windows/python.exe",
-          "args": ["scripts/process_data.py"],
+          "args": [
+            "scripts/process_data.py"
+          ],
           "name": "data_processing_script"
         },
         {
           "cmd": "python-x86_64-windows/python.exe",
-          "args": ["scripts/trainer.py"],
+          "args": [
+            "scripts/trainer.py"
+          ],
           "name": "trainer_script"
         }
       ]

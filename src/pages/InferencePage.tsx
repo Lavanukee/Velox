@@ -14,7 +14,7 @@ import {
     ChevronDown, Cpu, Zap, HardDrive, Layers, Terminal,
     Loader2, CheckCircle2, XCircle, Power, Paperclip, X,
     Settings, Wrench, BarChart2, Clock, PenTool, Search, Code, Brain, Activity,
-    ArrowUp, PlusCircle, Play
+    ArrowUp, PlusCircle, Play, Download
 } from 'lucide-react';
 import type { Option } from '../components/Select';
 
@@ -32,7 +32,7 @@ const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
                     background: 'rgba(139,92,246,0.15)',
                     border: '1px solid rgba(139,92,246,0.3)',
                     borderRadius: '8px',
-                    color: '#a78bfa',
+                    color: '#60a5fa',
                     cursor: 'pointer',
                     fontSize: '13px',
                     width: '100%',
@@ -367,11 +367,13 @@ interface CheckpointInfo {
     path: string;
     is_final: boolean;
     step_number: number | null;
+    base_model_name?: string;
 }
 
 interface ProjectLoraInfo {
     project_name: string;
     checkpoints: CheckpointInfo[];
+    base_model?: string;
 }
 
 // Helper for IDs
@@ -382,7 +384,7 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     const loadedModels = state.inference.loadedModels;
 
     const {
-        userMode,
+        userFeatures,
         chatMessages, setChatMessages,
         inputMessage, setInputMessage,
         selectedBaseModel, setSelectedBaseModel,
@@ -407,6 +409,8 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         infCanvasVisible, setInfCanvasVisible,
         infCanvasArtifacts, setInfCanvasArtifacts,
         infInferenceEngine, setInfInferenceEngine,
+        selectedProject, setSelectedProject,
+        selectedCheckpoint, setSelectedCheckpoint,
         isEngineUpdating, setupProgressPercent, setupMessage,
         // setLoadedModels, loadedModels, // Removed from AppContext
         evaluationMode, setEvaluationMode,
@@ -428,15 +432,13 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     // Resources
     const [modelOptions, setModelOptions] = useState<Option[]>([]);
     const [projectLoras, setProjectLoras] = useState<ProjectLoraInfo[]>([]);
-    const [selectedProject, setSelectedProject] = useState('');
-    const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
     const [benchmarkLoraAdapter, setBenchmarkLoraAdapter] = useState('');
 
     // Backend Logs / Progress
     const [promptProgress, setPromptProgress] = useState<number | null>(null); // 0-100 or null
 
     const {
-        streamMetrics, isPromptProcessing,
+        streamMetrics, benchmarkStreamMetrics, isPromptProcessing,
         isSending: isSendingGlobal, setIsSending, setIsPromptProcessing
     } = useApp();
 
@@ -468,17 +470,6 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
     // const isBenchmarking = evaluationMode === 'compare'; // Already derived above
     // const isBlindTest = evaluationMode === 'arena'; // Already derived above
     // const [revealIdentity, setRevealIdentity] = useState(false); // Unused for now
-
-    // We already have 'isBenchmarking' (view toggle)
-    // We already have 'benchmarkMessages' (chat history for B)
-    // Actually, I removed them intentionally to verify. Let's keep them removed if unused, or restore if used.
-    // The previous error logs showed benchmarkStreamMetrics usage.
-    const [benchmarkStreamMetrics, setBenchmarkStreamMetrics] = useState<{
-        tokens_per_second: number;
-        prompt_eval_time_ms: number;
-        eval_time_ms: number;
-        total_tokens: number;
-    } | null>(null);
 
     // Layout Resizing
     const [canvasWidth, setCanvasWidth] = useState(450);
@@ -589,6 +580,31 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
         } catch (error) {
             addLogMessage(`Error clearing chat history: ${error}`);
         }
+    };
+
+    const handleDeleteProject = async () => {
+        if (!selectedProject) return;
+        // if (!window.confirm(`Are you sure you want to delete project "${selectedProject}"? This cannot be undone.`)) return;
+
+        try {
+            const path = `data/outputs/${selectedProject}`;
+            await invoke('delete_resource_command', {
+                resourceType: 'lora_project',
+                resourcePath: path
+            });
+            addLogMessage(`Project ${selectedProject} deleted.`);
+            setSelectedProject('');
+            setSelectedCheckpoint('');
+            setSelectedLoraAdapter('');
+            loadResources();
+        } catch (e) {
+            addLogMessage(`Error deleting project: ${e}`);
+        }
+    };
+
+    const handleExportCheckpoint = (name: string, path: string) => {
+        addLogMessage(`Export initiated for ${name} (${path}). (Conversion UI integration pending)`);
+        // TODO: Trigger utilities panel or conversion modal
     };
 
     const handleEditStart = (index: number) => {
@@ -769,8 +785,10 @@ const InferencePage: React.FC<InferencePageProps> = ({ modelConfig, addLogMessag
                     setStatus('error');
                     return;
                 }
+                // Pass LoRA path via pipe separator for the python script to parse
+                const finalModelPath = loraPath ? `${model}|${loraPath}` : model;
                 await invoke('start_transformers_server_command', {
-                    modelPath: model,
+                    modelPath: finalModelPath,
                     port: port
                 });
             } else {
@@ -1090,7 +1108,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                 image: pendingImage
             }]);
 
-            if (isBenchmarking) {
+            if (isBenchmarking || isBlindTest) {
                 setBenchmarkMessages(prev => [...prev, {
                     id: generateId(),
                     text: msg,
@@ -1104,8 +1122,6 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
         setIsSending(true);
         setIsPromptProcessing(true);
         setPromptProgress(0);
-        // setStreamMetrics(null); // Managed globally now
-        setBenchmarkStreamMetrics(null);
 
         // Construct payload
         let payload: any = msg;
@@ -1243,7 +1259,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                     position: 'absolute',
                     inset: 0,
                     zIndex: 2000,
-                    background: 'rgba(9, 9, 11, 0.85)',
+                    background: 'var(--bg-overlay, rgba(9, 9, 11, 0.85))',
                     backdropFilter: 'blur(12px)',
                     display: 'flex',
                     flexDirection: 'column',
@@ -1257,8 +1273,8 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                         width: '80px',
                         height: '80px',
                         borderRadius: '24px',
-                        background: 'rgba(139, 92, 246, 0.1)',
-                        border: '1px solid rgba(139, 92, 246, 0.2)',
+                        background: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.2)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -1330,24 +1346,24 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             style={{
                                 width: '36px', height: '36px',
                                 borderRadius: '8px',
-                                background: evaluationMode !== 'off' ? 'rgba(167, 139, 250, 0.2)' : 'rgba(255,255,255,0.05)',
-                                border: evaluationMode !== 'off' ? '1px solid rgba(167, 139, 250, 0.5)' : '1px solid rgba(255,255,255,0.1)',
-                                color: evaluationMode !== 'off' ? '#a78bfa' : '#9ca3af',
+                                background: evaluationMode !== 'off' ? 'var(--accent-dim, rgba(59, 130, 246, 0.2))' : 'var(--bg-muted, rgba(255,255,255,0.05))',
+                                border: evaluationMode !== 'off' ? '1px solid var(--accent-primary, #60a5fa)' : '1px solid var(--border-subtle, rgba(255,255,255,0.1))',
+                                color: evaluationMode !== 'off' ? 'var(--accent-primary, #60a5fa)' : 'var(--text-muted, #9ca3af)',
                                 cursor: 'pointer',
                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                                 transition: 'all 0.2s'
                             }}
                             title={`Evaluation Mode: ${evaluationMode.charAt(0).toUpperCase() + evaluationMode.slice(1)}`}
                         >
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeOpacity="0.5" />
-                                <line x1="12" y1="2" x2="12" y2="22" stroke="currentColor" strokeDasharray="2 2" />
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <rect x="4" y="4" width="16" height="16" rx="2" strokeOpacity="0.5" />
+                                <line x1="12" y1="0" x2="12" y2="24" strokeDasharray="3 3" />
                             </svg>
                         </button>
                         {evaluationMode !== 'off' && (
                             <span style={{
                                 position: 'absolute', top: '100%', left: '0', marginTop: '4px',
-                                fontSize: '10px', color: '#a78bfa', whiteSpace: 'nowrap',
+                                fontSize: '10px', color: '#60a5fa', whiteSpace: 'nowrap',
                                 background: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: '4px',
                                 zIndex: 100
                             }}>
@@ -1383,8 +1399,8 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                     </div>
 
 
-                    {/* LoRA Selector */}
-                    <div style={{ flex: 1, maxWidth: '250px' }}>
+                    {/* LoRA Project Selector */}
+                    <div style={{ flex: 1, maxWidth: '200px' }}>
                         <Select
                             value={selectedProject}
                             onChange={(val) => {
@@ -1395,8 +1411,35 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 } else {
                                     const project = projectLoras.find(p => p.project_name === val);
                                     if (project && project.checkpoints.length > 0) {
-                                        setSelectedCheckpoint(project.checkpoints[0].name);
-                                        setSelectedLoraAdapter(project.checkpoints[0].path);
+                                        const defaultCheckpoint = project.checkpoints[0];
+                                        setSelectedCheckpoint(defaultCheckpoint.name);
+                                        setSelectedLoraAdapter(defaultCheckpoint.path);
+
+                                        // Auto-select Base Model
+                                        // Priority: Project Metadata > Checkpoint Config Metadata
+                                        const loraBase = project.base_model || defaultCheckpoint.base_model_name;
+
+                                        if (loraBase) {
+                                            const match = modelOptions.find(m => {
+                                                const mName = m.value.toLowerCase();
+                                                const lName = loraBase.toLowerCase();
+                                                // Check full match or filename match
+                                                const shortLName = lName.split('/').pop() || '';
+                                                const shortMName = mName.split('/').pop() || '';
+
+                                                return mName === lName ||
+                                                    (shortLName.length > 2 && mName.endsWith(shortLName)) ||
+                                                    (shortMName.length > 2 && lName.endsWith(shortMName));
+                                            });
+
+                                            if (match && match.value !== selectedBaseModel) {
+                                                setSelectedBaseModel(match.value);
+                                                addLogMessage(`Auto-selected base model: ${match.label}`);
+                                            } else if (!match) {
+                                                // Try to find by partial match if exact/filename failed?
+                                                // For now, doing nothing is safer than wrong selection
+                                            }
+                                        }
                                     }
                                 }
                             }}
@@ -1404,13 +1447,107 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 { value: '', label: 'No LoRA' },
                                 ...projectLoras.map(p => ({
                                     value: p.project_name,
-                                    label: `🔗 ${p.project_name}`
+                                    label: p.base_model
+                                        ? `🔗 ${p.project_name} [${p.base_model.split('/').pop()}]`
+                                        : `🔗 ${p.project_name}`
                                 }))
                             ]}
-                            placeholder="Select LoRA Adapter"
+                            placeholder="Select LoRA Project"
                             disabled={infServerStatus === 'loading'}
                         />
                     </div>
+
+                    {/* Delete Project Button */}
+                    {selectedProject && (
+                        <button
+                            onClick={handleDeleteProject}
+                            title="Delete Project"
+                            style={{
+                                padding: '8px',
+                                background: 'rgba(239, 68, 68, 0.1)',
+                                border: '1px solid rgba(239, 68, 68, 0.2)',
+                                borderRadius: '8px',
+                                color: '#ef4444',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                    )}
+
+                    {/* LoRA Checkpoint Selector */}
+                    <div style={{ flex: 1, maxWidth: '180px' }}>
+                        <Select
+                            value={selectedCheckpoint}
+                            onChange={(val) => {
+                                setSelectedCheckpoint(val);
+                                const project = projectLoras.find(p => p.project_name === selectedProject);
+                                const checkpoint = project?.checkpoints.find(c => c.name === val);
+                                if (checkpoint) {
+                                    setSelectedLoraAdapter(checkpoint.path);
+
+                                    // Auto-select Base Model (in case checkpoint differs)
+                                    const loraBase = checkpoint.base_model_name;
+                                    if (loraBase) {
+                                        const match = modelOptions.find(m => {
+                                            const mName = m.value.toLowerCase();
+                                            const lName = loraBase.toLowerCase();
+                                            const shortLName = lName.split('/').pop() || '';
+                                            return mName.includes(lName) || (shortLName.length > 2 && mName.includes(shortLName));
+                                        });
+                                        if (match && match.value !== selectedBaseModel) {
+                                            setSelectedBaseModel(match.value);
+                                            addLogMessage(`Auto-selected base model: ${match.label}`);
+                                        }
+                                    }
+                                }
+                            }}
+                            options={[
+                                { value: '', label: 'Select Checkpoint...' },
+                                ...(projectLoras.find(p => p.project_name === selectedProject)?.checkpoints.map(c => ({
+                                    value: c.name,
+                                    label: c.name + (c.is_final ? ' (Final)' : ''),
+                                    actions: [{
+                                        icon: <Download size={14} />,
+                                        onClick: () => handleExportCheckpoint(c.name, c.path),
+                                        tooltip: 'Export to GGUF'
+                                    }]
+                                })) || [])
+                            ]}
+                            placeholder="Checkpoint"
+                            disabled={!selectedProject || infServerStatus === 'loading'}
+                        />
+                    </div>
+
+                    {/* LoRA Compatibility Warning */}
+                    {selectedLoraAdapter && (() => {
+                        const project = projectLoras.find(p => p.project_name === selectedProject);
+                        const checkpoint = project?.checkpoints.find(c => c.path === selectedLoraAdapter);
+                        const loraBase = checkpoint?.base_model_name;
+
+                        // Heuristic: Check if loraBase is contained in selectedBaseModel path/name
+                        const isMatch = !loraBase || selectedBaseModel.toLowerCase().includes(loraBase.toLowerCase()) ||
+                            loraBase.toLowerCase().includes(selectedBaseModel.toLowerCase().split('/').pop() || '');
+
+                        if (!isMatch && loraBase) {
+                            return (
+                                <div style={{
+                                    padding: '6px 10px', background: 'rgba(239, 68, 68, 0.1)',
+                                    border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '6px',
+                                    color: '#ef4444', fontSize: '11px', flexShrink: 0,
+                                    display: 'flex', alignItems: 'center', gap: '6px'
+                                }}>
+                                    <XCircle size={14} />
+                                    <span>LoRA mismatch: Needs {loraBase.split('/').pop()}</span>
+                                </div>
+                            );
+                        }
+                        return null;
+                    })()}
 
                     {/* Status */}
                     <StatusIndicator />
@@ -1420,10 +1557,10 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                         onClick={handleRestartServer}
                         style={{
                             padding: '8px',
-                            background: 'rgba(255,255,255,0.05)',
-                            border: '1px solid rgba(255,255,255,0.1)',
+                            background: 'var(--bg-muted, rgba(255,255,255,0.05))',
+                            border: '1px solid var(--border-subtle, rgba(255,255,255,0.1))',
                             borderRadius: '8px',
-                            color: '#e4e4e7',
+                            color: 'var(--text-main, #e4e4e7)',
                             cursor: 'pointer',
                             display: 'flex',
                             alignItems: 'center',
@@ -1463,7 +1600,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             background: showSidebar ? 'rgba(167,139,250,0.2)' : 'rgba(255,255,255,0.05)',
                             border: '1px solid rgba(255,255,255,0.1)',
                             borderRadius: '10px',
-                            color: showSidebar ? '#a78bfa' : '#9ca3af',
+                            color: showSidebar ? '#60a5fa' : '#9ca3af',
                             cursor: 'pointer'
                         }}
                     >
@@ -1527,7 +1664,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                     </div>
                                     {/* Column B - Secondary Model */}
                                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px', background: 'rgba(167,139,250,0.05)', borderRadius: '8px' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px' }}>
                                             <Select
                                                 value={selectedBenchmarkModel}
                                                 onChange={(val) => setSelectedBenchmarkModel(val)}
@@ -1542,10 +1679,20 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                     onChange={(val) => setBenchmarkLoraAdapter(val)}
                                                     options={[
                                                         { value: '', label: 'No LoRA' },
-                                                        ...projectLoras.flatMap(p => p.checkpoints.map(c => ({
-                                                            value: c.path,
-                                                            label: `${p.project_name} / ${c.name}`
-                                                        })))
+                                                        ...projectLoras
+                                                            .filter(p => {
+                                                                if (!selectedBenchmarkModel) return true;
+                                                                return p.checkpoints.some(c => {
+                                                                    const loraBase = c.base_model_name;
+                                                                    if (!loraBase) return true;
+                                                                    return selectedBenchmarkModel.toLowerCase().includes(loraBase.toLowerCase()) ||
+                                                                        loraBase.toLowerCase().includes(selectedBenchmarkModel.toLowerCase().split('/').pop() || '');
+                                                                });
+                                                            })
+                                                            .flatMap(p => p.checkpoints.map(c => ({
+                                                                value: c.path,
+                                                                label: `${p.project_name} / ${c.name}`
+                                                            })))
                                                     ]}
                                                     placeholder="Select LoRA B"
                                                 />
@@ -1571,14 +1718,14 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             {evaluationMode === 'arena' && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' }}>
                                     {/* Arena Pool and Start Button */}
-                                    <div style={{ padding: '12px', background: 'rgba(167,139,250,0.05)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <div style={{ padding: '12px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <span style={{ fontSize: '11px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Arena Pool (select 2+ models)</span>
                                             <button
                                                 onClick={handleStartArena}
                                                 disabled={arenaSelectedModels.length < 2 || isSending}
                                                 style={{
-                                                    padding: '6px 12px', background: 'var(--accent-primary, #8b5cf6)',
+                                                    padding: '6px 12px', background: 'var(--accent-primary, #3b82f6)',
                                                     border: 'none', borderRadius: '6px', color: 'white',
                                                     fontSize: '12px', fontWeight: 'bold', cursor: 'pointer',
                                                     opacity: (arenaSelectedModels.length < 2 || isSending) ? 0.5 : 1,
@@ -1601,9 +1748,9 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                     }}
                                                     style={{
                                                         padding: '4px 8px', fontSize: '11px', borderRadius: '4px',
-                                                        background: arenaSelectedModels.includes(opt.value) ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.05)',
-                                                        border: arenaSelectedModels.includes(opt.value) ? '1px solid #a78bfa' : '1px solid rgba(255,255,255,0.1)',
-                                                        color: arenaSelectedModels.includes(opt.value) ? '#a78bfa' : '#9ca3af',
+                                                        background: arenaSelectedModels.includes(opt.value) ? 'rgba(59, 130, 246, 0.3)' : 'rgba(255,255,255,0.05)',
+                                                        border: arenaSelectedModels.includes(opt.value) ? '1px solid #60a5fa' : '1px solid rgba(255,255,255,0.1)',
+                                                        color: arenaSelectedModels.includes(opt.value) ? '#60a5fa' : '#9ca3af',
                                                         cursor: 'pointer'
                                                     }}
                                                 >
@@ -1616,12 +1763,12 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                     {/* Scoreboard (Collapsible) */}
                                     {Object.keys(arenaScores).length > 0 && (
                                         <div style={{ padding: '10px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', fontSize: '11px' }}>
-                                            <div style={{ fontWeight: 'bold', marginBottom: '8px', color: '#a78bfa' }}>Scoreboard</div>
+                                            <div style={{ fontWeight: 'bold', marginBottom: '8px', color: '#60a5fa' }}>Scoreboard</div>
                                             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
                                                 {Object.entries(arenaScores).map(([model, score]) => (
                                                     <div key={model} style={{ textAlign: 'center' }}>
                                                         <div style={{ color: '#fff', fontWeight: '600' }}>{model.split('/').pop()?.split('.')[0]}</div>
-                                                        <div style={{ color: '#a78bfa' }}>{score.wins + score.ties * 0.5}</div>
+                                                        <div style={{ color: '#60a5fa' }}>{score.wins + score.ties * 0.5}</div>
                                                         <div style={{ color: '#6b7280' }}>{((score.wins + score.ties * 0.5) / Math.max(score.total, 1)).toFixed(2)}</div>
                                                     </div>
                                                 ))}
@@ -1631,8 +1778,8 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
 
                                     {/* Reveal and Voting UI */}
                                     {(chatMessages.some(m => m.sender === 'bot') || benchmarkMessages.some(m => m.sender === 'bot')) && !isSending && (
-                                        <div style={{ padding: '20px', background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.1)', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center' }}>
-                                            <span style={{ fontSize: '14px', color: '#a78bfa', fontWeight: 500 }}>Which response was better?</span>
+                                        <div style={{ padding: '20px', background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.1)', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center' }}>
+                                            <span style={{ fontSize: '14px', color: '#60a5fa', fontWeight: 500 }}>Which response was better?</span>
                                             <div style={{ display: 'flex', gap: '12px' }}>
                                                 <button
                                                     onClick={() => handleArenaVote('left')}
@@ -1642,7 +1789,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                 </button>
                                                 <button
                                                     onClick={() => handleArenaVote('right')}
-                                                    style={{ padding: '10px 20px', background: '#8b5cf6', border: 'none', borderRadius: '8px', color: 'white', fontWeight: 'bold', cursor: 'pointer' }}
+                                                    style={{ padding: '10px 20px', background: '#3b82f6', border: 'none', borderRadius: '8px', color: 'white', fontWeight: 'bold', cursor: 'pointer' }}
                                                 >
                                                     Right Wins 👉
                                                 </button>
@@ -1663,7 +1810,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                             {arenaRevealed && arenaCurrentPair && (
                                                 <div style={{ marginTop: '10px', padding: '10px 20px', background: 'rgba(0,0,0,0.4)', borderRadius: '8px', display: 'flex', gap: '32px' }}>
                                                     <div><span style={{ color: '#60a5fa', fontWeight: 'bold' }}>Model A:</span> <span style={{ color: '#9ca3af' }}>{arenaCurrentPair[0].split('/').pop()}</span></div>
-                                                    <div><span style={{ color: '#a78bfa', fontWeight: 'bold' }}>Model B:</span> <span style={{ color: '#9ca3af' }}>{arenaCurrentPair[1].split('/').pop()}</span></div>
+                                                    <div><span style={{ color: '#60a5fa', fontWeight: 'bold' }}>Model B:</span> <span style={{ color: '#9ca3af' }}>{arenaCurrentPair[1].split('/').pop()}</span></div>
                                                 </div>
                                             )}
                                         </div>
@@ -1687,8 +1834,8 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                             ))}
                                         </div>
                                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                                            <div style={{ textAlign: 'center', padding: '10px', background: 'rgba(167,139,250,0.1)', borderRadius: '8px' }}>
-                                                <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#a78bfa' }}>Model B</span>
+                                            <div style={{ textAlign: 'center', padding: '10px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '8px' }}>
+                                                <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#60a5fa' }}>Model B</span>
                                             </div>
                                             {benchmarkMessages.map((msg, idx) => (
                                                 <MessageItem
@@ -1750,7 +1897,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             }}>
                                 {/* Processing / Status Overlay if needed, or just wiggle inside */}
                                 {isPromptProcessing && (
-                                    <div style={{ position: 'absolute', top: '-30px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.6)', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', color: '#a78bfa', backdropFilter: 'blur(4px)' }}>
+                                    <div style={{ position: 'absolute', top: '-30px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.6)', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', color: '#60a5fa', backdropFilter: 'blur(4px)' }}>
                                         Processing {promptProgress ? `${promptProgress}%` : '...'}
                                     </div>
                                 )}
@@ -1799,7 +1946,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                 onClick={() => setShowToolsDropup(!showToolsDropup)}
                                                 style={{
                                                     background: showToolsDropup ? 'rgba(167,139,250,0.2)' : 'transparent',
-                                                    border: 'none', color: showToolsDropup ? '#a78bfa' : '#9ca3af',
+                                                    border: 'none', color: showToolsDropup ? '#60a5fa' : '#9ca3af',
                                                     cursor: 'pointer', padding: '8px', borderRadius: '50%', transition: 'all 0.2s'
                                                 }}
                                                 className="icon-btn"
@@ -1833,7 +1980,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
 
                                                     <button
                                                         onClick={() => { setInfEnableCanvas(!infEnableCanvas); setShowToolsDropup(false); }}
-                                                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', background: infEnableCanvas ? 'rgba(167,139,250,0.1)' : 'transparent', border: 'none', borderRadius: '6px', color: infEnableCanvas ? '#a78bfa' : '#9ca3af', cursor: 'pointer', textAlign: 'left' }}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', background: infEnableCanvas ? 'rgba(167,139,250,0.1)' : 'transparent', border: 'none', borderRadius: '6px', color: infEnableCanvas ? '#60a5fa' : '#9ca3af', cursor: 'pointer', textAlign: 'left' }}
                                                     >
                                                         <PenTool size={16} /> <span style={{ fontSize: '13px' }}>Artifacts Canvas</span>
                                                     </button>
@@ -1888,16 +2035,17 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                             style={{
                                                 width: '36px', height: '36px',
                                                 borderRadius: '50%',
-                                                background: isSending ? 'rgba(239, 68, 68, 0.2)' : (inputMessage.trim() || pendingImage ? '#fff' : '#4b5563'),
-                                                border: isSending ? '1px solid rgba(239, 68, 68, 0.5)' : 'none',
-                                                color: isSending ? '#ef4444' : (inputMessage.trim() || pendingImage ? '#000' : '#9ca3af'),
+                                                background: isSending ? '#000000' : ((inputMessage.trim() || pendingImage) ? '#3b82f6' : 'rgba(59, 130, 246, 0.2)'),
+                                                border: 'none',
+                                                color: '#ffffff',
                                                 cursor: (inputMessage.trim() || pendingImage || isSending) ? 'pointer' : 'default',
                                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                transform: (inputMessage.trim() || pendingImage) && !isSending ? 'scale(1)' : 'scale(1)'
                                             }}
                                         >
                                             {isSending ? (
-                                                <div style={{ width: '12px', height: '12px', borderRadius: '2px', background: '#ef4444' }} />
+                                                <div style={{ width: '12px', height: '12px', borderRadius: '2px', background: '#ffffff' }} />
                                             ) : <ArrowUp size={20} strokeWidth={3} />}
                                         </button>
                                     </div>
@@ -1917,7 +2065,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             <div
                                 onMouseDown={() => setIsResizingCanvas(true)}
                                 style={{ width: '4px', background: 'rgba(255,255,255,0.05)', cursor: 'col-resize', transition: 'background 0.2s', zIndex: 10 }}
-                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(167, 139, 250, 0.5)'}
+                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.5)'}
                                 onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
                             />
                             <div style={{ width: canvasWidth, minWidth: '300px', borderLeft: '1px solid var(--border-subtle)', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
@@ -1940,7 +2088,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                             <div
                                 onMouseDown={() => setIsResizingSettings(true)}
                                 style={{ width: '4px', background: 'rgba(255,255,255,0.05)', cursor: 'col-resize', transition: 'background 0.2s', zIndex: 10 }}
-                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(167, 139, 250, 0.5)'}
+                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.5)'}
                                 onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
                             />
                             <div style={{
@@ -1982,22 +2130,22 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                         />
                                     </div>
 
-                                    {userMode === 'power' && (
+                                    {userFeatures.showAdvancedInference && (
                                         <>
                                             <div style={{ marginBottom: '16px' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
                                                     <span>Top P</span>
-                                                    <span style={{ color: '#a78bfa' }}>{topP}</span>
+                                                    <span style={{ color: '#60a5fa' }}>{topP}</span>
                                                 </div>
-                                                <input type="range" min="0" max="1" step="0.05" value={topP} onChange={(e) => setTopP(Number(e.target.value))} style={{ width: '100%', accentColor: '#a78bfa' }} />
+                                                <input type="range" min="0" max="1" step="0.05" value={topP} onChange={(e) => setTopP(Number(e.target.value))} style={{ width: '100%', accentColor: '#60a5fa' }} />
                                             </div>
 
                                             <div style={{ marginBottom: '16px' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
                                                     <span>Top K</span>
-                                                    <span style={{ color: '#a78bfa' }}>{topK}</span>
+                                                    <span style={{ color: '#60a5fa' }}>{topK}</span>
                                                 </div>
-                                                <input type="range" min="0" max="100" step="1" value={topK} onChange={(e) => setTopK(Number(e.target.value))} style={{ width: '100%', accentColor: '#a78bfa' }} />
+                                                <input type="range" min="0" max="100" step="1" value={topK} onChange={(e) => setTopK(Number(e.target.value))} style={{ width: '100%', accentColor: '#60a5fa' }} />
                                             </div>
 
                                             <Input
@@ -2011,7 +2159,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 </div>
 
                                 {/* Advanced Section (Power User) */}
-                                {userMode === 'power' && (
+                                {userFeatures.showAdvancedInference && (
                                     <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
                                         <button
                                             onClick={() => setShowAdvanced(!showAdvanced)}
@@ -2055,7 +2203,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                             // Wait, the previous step removed the listener, but did we also remove the 'handleSendMessage' that sets isSending?
                                                             // Yes, we need to map isSendingGlobal to the specific UI elements.
                                                         */}
-                                                        <span style={{ color: '#a78bfa' }}>{infGpuLayers >= maxGpuLayers ? 'Max' : infGpuLayers} / {maxGpuLayers}</span>
+                                                        <span style={{ color: '#60a5fa' }}>{infGpuLayers >= maxGpuLayers ? 'Max' : infGpuLayers} / {maxGpuLayers}</span>
                                                     </label>
                                                     <input
                                                         type="range"
@@ -2067,7 +2215,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                                             const val = parseInt(e.target.value);
                                                             setInfGpuLayers(val);
                                                         }}
-                                                        style={{ width: '100%', accentColor: '#a78bfa', cursor: 'pointer' }}
+                                                        style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }}
                                                     />
                                                 </div>
 
@@ -2212,7 +2360,7 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                 </div>
 
                                 {/* Command Preview */}
-                                {userMode === 'power' && selectedBaseModel && (
+                                {userFeatures.showAdvancedInference && selectedBaseModel && (
                                     <div style={{ padding: '20px' }}>
                                         <button
                                             onClick={() => setShowCommandPreview(!showCommandPreview)}
@@ -2225,10 +2373,10 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                             onClick={() => setEvaluationMode(evaluationMode === 'off' ? 'compare' : 'off')}
                                             style={{
                                                 padding: '8px 14px',
-                                                background: evaluationMode !== 'off' ? 'rgba(167, 139, 250, 0.1)' : 'rgba(255,255,255,0.05)',
-                                                border: evaluationMode !== 'off' ? '1px solid rgba(167, 139, 250, 0.3)' : '1px solid rgba(255,255,255,0.1)',
+                                                background: evaluationMode !== 'off' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(255,255,255,0.05)',
+                                                border: evaluationMode !== 'off' ? '1px solid rgba(59, 130, 246, 0.3)' : '1px solid rgba(255,255,255,0.1)',
                                                 borderRadius: '8px',
-                                                color: evaluationMode !== 'off' ? '#a78bfa' : '#9ca3af',
+                                                color: evaluationMode !== 'off' ? '#60a5fa' : '#9ca3af',
                                                 fontSize: '12px',
                                                 fontWeight: 600,
                                                 cursor: 'pointer',
@@ -2241,6 +2389,16 @@ For new code blocks that shouldn't open a separate canvas, use standard markdown
                                             <BarChart2 size={14} />
                                             {evaluationMode === 'off' ? 'Evaluation: Off' : evaluationMode === 'compare' ? 'Evaluation: Compare' : 'Evaluation: Arena'}
                                         </button>
+
+                                        {userFeatures.showMetrics && (
+                                            <div style={{
+                                                padding: '20px',
+                                                borderBottom: '1px solid rgba(255,255,255,0.06)',
+                                                background: 'rgba(59, 130, 246, 0.03)'
+                                            }}>
+                                                {/* Metrics content would go here */}
+                                            </div>
+                                        )}
 
                                         {showCommandPreview && (
                                             <pre style={{

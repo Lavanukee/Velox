@@ -198,7 +198,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
                 background: 'rgba(0,0,0,0.2)'
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <PenTool size={16} style={{ color: '#a78bfa' }} />
+                    <PenTool size={16} style={{ color: '#60a5fa' }} />
                     <span style={{ fontSize: 14, fontWeight: 600 }}>Writing Area</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -243,7 +243,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
                         padding: '4px 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4,
                         background: isEditing ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.05)',
                         border: `1px solid ${isEditing ? 'rgba(139,92,246,0.3)' : 'rgba(255,255,255,0.1)'}`,
-                        borderRadius: 4, color: isEditing ? '#a78bfa' : '#9ca3af', cursor: 'pointer'
+                        borderRadius: 4, color: isEditing ? '#60a5fa' : '#9ca3af', cursor: 'pointer'
                     }}
                 >
                     <Edit3 size={12} /> {isEditing ? 'Done' : 'Edit'}
@@ -337,7 +337,7 @@ export const CanvasPanel: React.FC<CanvasPanelProps> = ({
                             style={{
                                 padding: '10px 20px', fontSize: 13, background: 'rgba(139,92,246,0.15)',
                                 border: '1px solid rgba(139,92,246,0.3)', borderRadius: 8,
-                                color: '#a78bfa', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8
+                                color: '#60a5fa', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8
                             }}
                         >
                             <Plus size={16} /> Start Writing

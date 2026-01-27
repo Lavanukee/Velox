@@ -1,0 +1,210 @@
+/* Global Drop Zone Overlay */
+.global-drop-zone {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(12px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: dropZoneFadeIn 0.2s ease-out;
+}
+
+@keyframes dropZoneFadeIn {
+    from {
+        opacity: 0;
+        backdrop-filter: blur(0px);
+    }
+
+    to {
+        opacity: 1;
+        backdrop-filter: blur(12px);
+    }
+}
+
+.drop-zone-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    padding: 48px 64px;
+    background: linear-gradient(135deg, rgba(30, 30, 40, 0.9), rgba(20, 20, 28, 0.95));
+    border: 2px dashed rgba(138, 180, 248, 0.5);
+    border-radius: 24px;
+    box-shadow:
+        0 0 60px rgba(138, 180, 248, 0.15),
+        0 20px 40px rgba(0, 0, 0, 0.4);
+    animation: dropZoneContentPulse 2s ease-in-out infinite;
+    max-width: 600px;
+    min-width: 400px;
+}
+
+@keyframes dropZoneContentPulse {
+
+    0%,
+    100% {
+        border-color: rgba(138, 180, 248, 0.5);
+        box-shadow:
+            0 0 60px rgba(138, 180, 248, 0.15),
+            0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    50% {
+        border-color: rgba(138, 180, 248, 0.8);
+        box-shadow:
+            0 0 80px rgba(138, 180, 248, 0.25),
+            0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+}
+
+.drop-zone-icon {
+    color: var(--accent-primary, #8ab4f8);
+    opacity: 0.9;
+}
+
+.upload-icon {
+    animation: uploadBounce 1s ease-in-out infinite;
+}
+
+@keyframes uploadBounce {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
+}
+
+.drop-zone-title {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--text-main, #fff);
+    margin: 0;
+    letter-spacing: -0.5px;
+}
+
+.drop-zone-subtitle {
+    font-size: 14px;
+    color: var(--text-dim, rgba(255, 255, 255, 0.6));
+    margin: 0;
+}
+
+/* Drop Items */
+.drop-zone-items {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+}
+
+.drop-item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 20px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.2s ease;
+}
+
+.drop-item.gguf,
+.drop-item.model,
+.drop-item.mmproj {
+    border-left: 3px solid var(--accent-blue, #60a5fa);
+}
+
+.drop-item.dataset {
+    border-left: 3px solid var(--accent-green, #4ade80);
+}
+
+.drop-item.lora {
+    border-left: 3px solid var(--accent-purple, #a78bfa);
+}
+
+.drop-item.unknown {
+    border-left: 3px solid var(--text-dim, rgba(255, 255, 255, 0.4));
+}
+
+.drop-item-icon {
+    color: var(--text-main, #fff);
+    opacity: 0.8;
+    flex-shrink: 0;
+}
+
+.icon-stack {
+    position: relative;
+    display: inline-block;
+}
+
+.vision-badge {
+    position: absolute;
+    bottom: -4px;
+    right: -8px;
+    font-size: 16px;
+}
+
+.drop-item-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.drop-item-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-main, #fff);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.drop-item-type {
+    font-size: 12px;
+    color: var(--text-dim, rgba(255, 255, 255, 0.6));
+}
+
+.drop-item-size {
+    font-size: 11px;
+    color: var(--text-dim, rgba(255, 255, 255, 0.5));
+}
+
+.confidence-badge {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.confidence-badge.high {
+    background: rgba(74, 222, 128, 0.2);
+    color: #4ade80;
+}
+
+.confidence-badge.medium {
+    background: rgba(251, 191, 36, 0.2);
+    color: #fbbf24;
+}
+
+.confidence-badge.low {
+    background: rgba(248, 113, 113, 0.2);
+    color: #f87171;
+}
+
+.more-items {
+    font-size: 12px;
+    color: var(--text-dim, rgba(255, 255, 255, 0.5));
+    text-align: center;
+    margin: 0;
+}

@@ -27,6 +27,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(PythonProcessState::default()))
         .manage(Arc::new(ModelsState {
@@ -176,8 +177,11 @@ pub fn run() {
             list_model_folders_command,
             list_dataset_folders_command,
             list_finetuning_models_command,
+            get_model_config_command,
             list_training_projects_command,
             list_loras_by_project_command,
+            save_project_config_command,
+            load_project_config_command,
             start_llama_server_command,
             stop_llama_server_command,
             check_llama_server_status_command,
@@ -196,11 +200,14 @@ pub fn run() {
             download_hf_dataset_command,
             convert_dataset_command,
             delete_resource_command,
+            delete_project_command,
+            rename_resource_command,
             import_resource_command,
             load_presets_command,
             save_preset_command,
             convert_hf_to_gguf_command,
             convert_lora_to_gguf_command,
+            convert_unsloth_gguf_command,
             cancel_download_command,
             start_training_command,
             stop_training_command,
@@ -220,7 +227,15 @@ pub fn run() {
             execute_tool_command,
             save_custom_tool_command,
             fix_dataset_command,
-            process_vlm_dataset_command
+            bulk_edit_dataset_command,
+            process_vlm_dataset_command,
+            resolve_path_command,
+            load_dataset_preview_command,
+            save_dataset_command,
+            apply_dataset_edits_command,
+            generate_dataset_command,
+            create_dataset_command,
+            analyze_drop_command
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

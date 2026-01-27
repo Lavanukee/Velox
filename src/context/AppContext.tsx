@@ -2,10 +2,46 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import type { CanvasArtifact } from '../components/CanvasPanel';
-import { Resource } from '../types';
+import { Resource, Notification, AppView, HardwareInfo } from '../types';
 
 type UserMode = 'user' | 'power';
 type ColorMode = 'light' | 'dark';
+
+export interface UserFeatures {
+  showUserModeToggle: boolean;
+  showAdvancedFinetuning: boolean;
+  showAdvancedInference: boolean;
+  showMetrics: boolean;
+  enableWebSearch: boolean;
+  enableCodeExec: boolean;
+  enableCanvas: boolean;
+  autoFitMemory: boolean;
+  autoProcessDatasets: boolean;
+}
+
+const DEFAULT_USER_FEATURES: UserFeatures = {
+  showUserModeToggle: true,
+  showAdvancedFinetuning: false,
+  showAdvancedInference: false,
+  showMetrics: false,
+  enableWebSearch: false,
+  enableCodeExec: false,
+  enableCanvas: false,
+  autoFitMemory: true,
+  autoProcessDatasets: true
+};
+
+const DEFAULT_POWER_FEATURES: UserFeatures = {
+  showUserModeToggle: true,
+  showAdvancedFinetuning: true,
+  showAdvancedInference: true,
+  showMetrics: true,
+  enableWebSearch: true,
+  enableCodeExec: true,
+  enableCanvas: true,
+  autoFitMemory: false,
+  autoProcessDatasets: true
+};
 
 export interface ChatMessage {
   id?: string;
@@ -17,10 +53,12 @@ export interface ChatMessage {
 }
 
 interface AppContextType {
-  // User Mode
+  // User Mode & Features
   userMode: UserMode;
   toggleUserMode: () => void;
   setUserMode: (mode: UserMode) => void;
+  userFeatures: UserFeatures;
+  setUserFeatures: (features: Partial<UserFeatures>) => void;
 
   // Inference State
   chatMessages: ChatMessage[];
@@ -90,11 +128,26 @@ interface AppContextType {
   infInferenceEngine: 'llamacpp' | 'transformers';
   setInfInferenceEngine: (engine: 'llamacpp' | 'transformers') => void;
 
+  selectedProject: string;
+  setSelectedProject: (project: string) => void;
+  selectedCheckpoint: string;
+  setSelectedCheckpoint: (checkpoint: string) => void;
+
   // Resource Dashboard State
   rdHfQuery: string;
   setRdHfQuery: (query: string) => void;
+  rdHfAuthor: string;
+  setRdHfAuthor: (author: string) => void;
+  rdHfModalities: string;
+  setRdHfModalities: (modalities: string) => void;
+  rdHfSizeRange: string;
+  setRdHfSizeRange: (range: string) => void;
   rdHfType: 'model' | 'dataset';
   setRdHfType: (type: 'model' | 'dataset') => void;
+  rdShowFindNew: boolean;
+  setRdShowFindNew: (show: boolean) => void;
+  currentView: AppView;
+  setCurrentView: (view: AppView) => void;
   rdSelectedPaths: Set<string>;
   setRdSelectedPaths: React.Dispatch<React.SetStateAction<Set<string>>>;
   autoProcessDatasets: boolean;
@@ -109,24 +162,26 @@ interface AppContextType {
   setFtSelectedDataset: (dataset: string) => void;
   ftSelectedDatasets: string[];
   setFtSelectedDatasets: React.Dispatch<React.SetStateAction<string[]>>;
+  ftDatasetMixing: Record<string, number>; // dataset path -> percentage (0-100)
+  setFtDatasetMixing: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   ftLocalDatasetPath: string;
   setFtLocalDatasetPath: (path: string) => void;
   ftHfModelId: string;
   setFtHfModelId: (id: string) => void;
   ftHfDatasetId: string;
   setFtHfDatasetId: (id: string) => void;
-  ftNumEpochs: number;
-  setFtNumEpochs: (n: number) => void;
-  ftBatchSize: number;
-  setFtBatchSize: (n: number) => void;
-  ftLearningRate: number;
-  setFtLearningRate: (n: number) => void;
-  ftLoraR: number;
-  setFtLoraR: (n: number) => void;
-  ftLoraAlpha: number;
-  setFtLoraAlpha: (n: number) => void;
-  ftMaxSeqLength: number;
-  setFtMaxSeqLength: (n: number) => void;
+  ftNumEpochs: number | string;
+  setFtNumEpochs: (n: number | string) => void;
+  ftBatchSize: number | string;
+  setFtBatchSize: (n: number | string) => void;
+  ftLearningRate: number | string;
+  setFtLearningRate: (n: number | string) => void;
+  ftLoraR: number | string;
+  setFtLoraR: (n: number | string) => void;
+  ftLoraAlpha: number | string;
+  setFtLoraAlpha: (n: number | string) => void;
+  ftMaxSeqLength: number | string;
+  setFtMaxSeqLength: (n: number | string) => void;
   ftActiveTab: 'config' | 'training';
   setFtActiveTab: (tab: 'config' | 'training') => void;
   ftIsTraining: boolean;
@@ -152,6 +207,26 @@ interface AppContextType {
   loadResources: () => Promise<void>;
   isConvertingMap: Record<string, boolean>;
   setConvertingMap: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+
+  // Global Conversion State
+  utIsConverting: boolean;
+  setUtIsConverting: (val: boolean) => void;
+  utConversionProgress: number;
+  setUtConversionProgress: (val: number) => void;
+  utConversionLabel: string;
+  setUtConversionLabel: (val: string) => void;
+  utSourcePath: string;
+  setUtSourcePath: (val: string) => void;
+  utOutputPath: string;
+  setUtOutputPath: (val: string) => void;
+  utBasePath: string;
+  setUtBasePath: (val: string) => void;
+  utQuantizationType: string;
+  setUtQuantizationType: (val: string) => void;
+  utConversionType: 'hf_to_gguf' | 'lora_to_gguf';
+  setUtConversionType: (val: 'hf_to_gguf' | 'lora_to_gguf') => void;
+  utConversionEngine: 'standard' | 'unsloth';
+  setUtConversionEngine: (val: 'standard' | 'unsloth') => void;
 
   // Global Setup State
   showPythonSetup: boolean;
@@ -205,6 +280,12 @@ interface AppContextType {
     eval_time_ms: number;
     total_tokens: number;
   } | null;
+  benchmarkStreamMetrics: {
+    tokens_per_second: number;
+    prompt_eval_time_ms: number;
+    eval_time_ms: number;
+    total_tokens: number;
+  } | null;
   isPromptProcessing: boolean;
   setIsPromptProcessing: (val: boolean) => void;
   isSending: boolean;
@@ -213,18 +294,36 @@ interface AppContextType {
   // App Level
   appScale: number;
   setAppScale: (scale: number) => void;
+
+  // Global Notifications
+  notifications: Notification[];
+  addNotification: (message: string, type?: 'success' | 'error' | 'info') => void;
+
+  // System
+  hardwareInfo: HardwareInfo | null;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // User Mode
+  // User Mode & Features
   const [userMode, setUserModeState] = useState<UserMode>('user');
+  const [userFeatures, setUserFeaturesState] = useState<UserFeatures>(DEFAULT_USER_FEATURES);
+
+  const setUserFeatures = (newFeatures: Partial<UserFeatures>) => {
+    setUserFeaturesState(prev => {
+      const updated = { ...prev, ...newFeatures };
+      localStorage.setItem('velox_user_features', JSON.stringify(updated));
+      return updated;
+    });
+  };
 
   // Inference State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [selectedBaseModel, setSelectedBaseModel] = useState('');
+  const [selectedProject, setSelectedProject] = useState('');
+  const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
   const [selectedMmproj, setSelectedMmproj] = useState('');
   const [selectedLoraAdapter, setSelectedLoraAdapter] = useState('');
   const [temperature, setTemperature] = useState(0.7);
@@ -263,7 +362,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Resource Dashboard State
   const [rdHfQuery, setRdHfQuery] = useState('');
+  const [rdHfAuthor, setRdHfAuthor] = useState('');
+  const [rdHfModalities, setRdHfModalities] = useState('');
+  const [rdHfSizeRange, setRdHfSizeRange] = useState('');
   const [rdHfType, setRdHfType] = useState<'model' | 'dataset'>('model');
+  const [rdShowFindNew, setRdShowFindNew] = useState(false);
+  const [currentView, setCurrentView] = useState<AppView>(AppView.Dashboard);
   const [rdSelectedPaths, setRdSelectedPaths] = useState<Set<string>>(new Set());
   const [autoProcessDatasets, setAutoProcessDatasetsState] = useState(true);
 
@@ -272,15 +376,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [ftSelectedModel, setFtSelectedModel] = useState('');
   const [ftSelectedDataset, setFtSelectedDataset] = useState('');
   const [ftSelectedDatasets, setFtSelectedDatasets] = useState<string[]>([]);
+  const [ftDatasetMixing, setFtDatasetMixing] = useState<Record<string, number>>({});
+
+  // System
+  const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
+
+  useEffect(() => {
+    invoke<HardwareInfo>('get_hardware_info_command')
+      .then(info => {
+        console.log("Hardware Detected:", info);
+        setHardwareInfo(info);
+      })
+      .catch(err => console.error("Failed to detect hardware:", err));
+  }, []);
+
+  // -- Derived --
   const [ftLocalDatasetPath, setFtLocalDatasetPath] = useState('');
   const [ftHfModelId, setFtHfModelId] = useState('');
   const [ftHfDatasetId, setFtHfDatasetId] = useState('');
-  const [ftNumEpochs, setFtNumEpochs] = useState(3);
-  const [ftBatchSize, setFtBatchSize] = useState(4);
-  const [ftLearningRate, setFtLearningRate] = useState(2e-4);
-  const [ftLoraR, setFtLoraR] = useState(16);
-  const [ftLoraAlpha, setFtLoraAlpha] = useState(32);
-  const [ftMaxSeqLength, setFtMaxSeqLength] = useState(2048);
+  const [ftNumEpochs, setFtNumEpochs] = useState<number | string>(3);
+  const [ftBatchSize, setFtBatchSize] = useState<number | string>(4);
+  const [ftLearningRate, setFtLearningRate] = useState<number | string>(2e-4);
+  const [ftLoraR, setFtLoraR] = useState<number | string>(16);
+  const [ftLoraAlpha, setFtLoraAlpha] = useState<number | string>(32);
+  const [ftMaxSeqLength, setFtMaxSeqLength] = useState<number | string>(2048);
   const [ftActiveTab, setFtActiveTab] = useState<'config' | 'training'>('config');
   const [ftIsTraining, setFtIsTraining] = useState(false);
   const [ftTrainingStatus, setFtTrainingStatus] = useState<'idle' | 'initializing' | 'training'>('idle');
@@ -299,6 +418,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [resources, setResources] = useState<Resource[]>([]);
   const [isConvertingMap, setConvertingMap] = useState<Record<string, boolean>>({});
 
+  // Global Conversion State
+  const [utIsConverting, setUtIsConverting] = useState(false);
+  const [utConversionProgress, setUtConversionProgress] = useState(0);
+  const [utConversionLabel, setUtConversionLabel] = useState('');
+  const [utSourcePath, setUtSourcePath] = useState('');
+  const [utOutputPath, setUtOutputPath] = useState('');
+  const [utBasePath, setUtBasePath] = useState('');
+  const [utQuantizationType, setUtQuantizationType] = useState('q8_0');
+  const [utConversionType, setUtConversionType] = useState<'hf_to_gguf' | 'lora_to_gguf'>('hf_to_gguf');
+  const [utConversionEngine, setUtConversionEngine] = useState<'standard' | 'unsloth'>('unsloth');
+
   const loadResources = useCallback(async () => {
     try {
       const raw: Resource[] = await invoke('list_all_resources_command');
@@ -310,12 +440,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Global Setup State
   const [showPythonSetup, setShowPythonSetup] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(true); // Show splash on first load during Python check
+  const [isInitializing, setIsInitializing] = useState(false); // Hide splash by default, show only if setup needed
   const [setupProgressPercent, setSetupProgressPercent] = useState(0);
   const [setupMessage, setSetupMessage] = useState("Initializing environment...");
   const [setupLoadedBytes, setSetupLoadedBytes] = useState(0);
   const [setupTotalBytes, setSetupTotalBytes] = useState(0);
   const [isEngineUpdating, setIsEngineUpdating] = useState(false);
+
+  // Global Notifications
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const addNotification = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = `notif_${Date.now()}`;
+    setNotifications(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 5000);
+  }, []);
 
   // Benchmarking State
   const [isBenchmarking, setIsBenchmarking] = useState(false);
@@ -353,6 +494,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     eval_time_ms: number;
     total_tokens: number;
   } | null>(null);
+  const [benchmarkStreamMetrics, setBenchmarkStreamMetrics] = useState<{
+    tokens_per_second: number;
+    prompt_eval_time_ms: number;
+    eval_time_ms: number;
+    total_tokens: number;
+  } | null>(null);
   const [isPromptProcessingState, setIsPromptProcessing] = useState(false);
   const [isSendingState, setIsSending] = useState(false);
 
@@ -369,8 +516,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Global Chat Listeners
   useEffect(() => {
-    let unlistenChunk: () => void;
-    let unlistenDone: () => void;
+    let unlistenChunk: (() => void) | undefined;
+    let unlistenDone: (() => void) | undefined;
+    let unlistenBenchChunk: (() => void) | undefined;
+    let unlistenBenchDone: (() => void) | undefined;
 
     const setupListeners = async () => {
       unlistenChunk = await listen('chat-stream-chunk', (event: any) => {
@@ -423,8 +572,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       });
 
-      // Benchmark Listeners (Simplified: we keep them local if specific to page? 
-      // Actually user might navigate away during benchmark. Let's keep them here too or just ignore for now as typical usage is focused)
+      unlistenBenchChunk = await listen('chat-stream-chunk-benchmark', (event: any) => {
+        const chunk = event.payload as { content: string };
+        setBenchmarkMessages(prev => {
+          const lastMsg = prev[prev.length - 1];
+          if (lastMsg && lastMsg.sender === 'bot' && lastMsg.isStreaming) {
+            return [...prev.slice(0, -1), { ...lastMsg, text: lastMsg.text + chunk.content }];
+          } else {
+            return [...prev, { text: chunk.content, sender: 'bot', timestamp: Date.now(), isStreaming: true }];
+          }
+        });
+      });
+
+      unlistenBenchDone = await listen('chat-stream-done-benchmark', async (event: any) => {
+        const metrics = event.payload;
+        setBenchmarkStreamMetrics(metrics);
+        setBenchmarkMessages(prev => {
+          const lastMsg = prev[prev.length - 1];
+          if (lastMsg && lastMsg.sender === 'bot') {
+            return [...prev.slice(0, -1), { ...lastMsg, isStreaming: false }];
+          }
+          return prev;
+        });
+      });
+
       // For now, only main chat is persistent.
 
       unlistenDone = await listen('chat-stream-done', async (event: any) => {
@@ -495,6 +666,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       if (unlistenChunk) unlistenChunk();
       if (unlistenDone) unlistenDone();
+      if (unlistenBenchChunk) unlistenBenchChunk();
+      if (unlistenBenchDone) unlistenBenchDone();
     };
   }, [infEnableCanvas]); // Re-bind if canvas setting changes (mostly fine)
 
@@ -567,6 +740,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setUserMode = (mode: UserMode) => {
     setUserModeState(mode);
     localStorage.setItem('velox_user_mode', mode);
+    // Apply default feature set for mode
+    const defaultFeatures = mode === 'power' ? DEFAULT_POWER_FEATURES : DEFAULT_USER_FEATURES;
+    setUserFeatures(defaultFeatures);
   };
 
   const toggleUserMode = () => {
@@ -593,10 +769,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadResources();
     const unlistenModel = listen('model_downloaded', () => loadResources());
     const unlistenDataset = listen('dataset_downloaded', () => loadResources());
+    const unlistenProgress = listen<number>('conversion_progress', (event) => {
+      setUtConversionProgress(event.payload);
+    });
+
+    // Persistent Training Finished Listener
+    const unlistenTraining = listen('training_finished', (event: any) => {
+      const { success, code } = event.payload;
+      setFtIsTraining(false);
+      setFtTrainingStatus('idle');
+
+      if (success) {
+        addNotification("Training Completed Successfully!", 'success');
+      } else {
+        addNotification(`Training Failed (Exit Code: ${code}). Check logs.`, 'error');
+      }
+
+      console.log(`Training finished: success=${success}, exitCode=${code}`);
+    });
 
     return () => {
       unlistenModel.then(f => f());
       unlistenDataset.then(f => f());
+      unlistenProgress.then(f => f());
+      unlistenTraining.then(f => f());
     };
   }, [loadResources]);
 
@@ -642,10 +838,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const savedAutoProcess = localStorage.getItem('velox_auto_process');
     if (savedAutoProcess !== null) setAutoProcessDatasetsState(JSON.parse(savedAutoProcess));
+
+    const savedFeatures = localStorage.getItem('velox_user_features');
+    if (savedFeatures) setUserFeaturesState(JSON.parse(savedFeatures));
   }, []);
 
   const value = {
-    userMode, toggleUserMode, setUserMode,
+    userMode, toggleUserMode, setUserMode, userFeatures, setUserFeatures,
     chatMessages, setChatMessages,
     inputMessage, setInputMessage,
     selectedBaseModel, setSelectedBaseModel,
@@ -672,15 +871,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     infCanvasArtifacts, setInfCanvasArtifacts,
     infAutoFit, setInfAutoFit,
     infInferenceEngine, setInfInferenceEngine,
+
+    selectedProject,
+    setSelectedProject,
+    selectedCheckpoint,
+    setSelectedCheckpoint,
+
     autoUpdate, setAutoUpdate,
     showInfoTooltips, setShowInfoTooltips,
     rdHfQuery, setRdHfQuery,
+    rdHfAuthor, setRdHfAuthor,
+    rdHfModalities, setRdHfModalities,
+    rdHfSizeRange, setRdHfSizeRange,
     rdHfType, setRdHfType,
+    rdShowFindNew, setRdShowFindNew,
+    currentView, setCurrentView,
     rdSelectedPaths, setRdSelectedPaths,
     ftProjectName, setFtProjectName,
     ftSelectedModel, setFtSelectedModel,
     ftSelectedDataset, setFtSelectedDataset,
     ftSelectedDatasets, setFtSelectedDatasets,
+    ftDatasetMixing,
+    setFtDatasetMixing,
+    hardwareInfo,
     ftLocalDatasetPath, setFtLocalDatasetPath,
     ftHfModelId, setFtHfModelId,
     ftHfDatasetId, setFtHfDatasetId,
@@ -707,6 +920,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setupTotalBytes, setSetupTotalBytes,
     runGlobalSetup,
     isEngineUpdating, setIsEngineUpdating,
+    // Global Notifications
+    notifications, addNotification,
+    // Utilities Conversion
+    utIsConverting, setUtIsConverting,
+    utConversionProgress, setUtConversionProgress,
+    utConversionLabel, setUtConversionLabel,
+    utSourcePath, setUtSourcePath,
+    utOutputPath, setUtOutputPath,
+    utBasePath, setUtBasePath,
+    utQuantizationType, setUtQuantizationType,
+    utConversionType, setUtConversionType,
+    utConversionEngine, setUtConversionEngine,
     resources, setResources, loadResources,
     isConvertingMap, setConvertingMap,
     theme: 'cyber' as 'cyber' | 'forge', // Default theme
@@ -729,6 +954,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Global Streaming State
     streamMetrics: streamMetricsState,
+    benchmarkStreamMetrics,
     isPromptProcessing: isPromptProcessingState,
     setIsPromptProcessing,
     isSending: isSendingState,

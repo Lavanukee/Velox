@@ -18,7 +18,7 @@ export const Toggle: React.FC<ToggleProps> = ({ checked, onChange, label }) => {
             <div
                 className={`toggle-switch ${checked ? 'checked' : ''}`}
                 style={{
-                    backgroundColor: checked ? 'rgba(139, 92, 246, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                    backgroundColor: checked ? 'rgba(59, 130, 246, 0.4)' : 'rgba(255, 255, 255, 0.08)',
                     transition: 'background-color 0.2s'
                 }}
             >
@@ -28,7 +28,7 @@ export const Toggle: React.FC<ToggleProps> = ({ checked, onChange, label }) => {
                         x: checked ? 20 : 0
                     }}
                     style={{
-                        backgroundColor: checked ? '#a78bfa' : '#6b7280'
+                        backgroundColor: checked ? '#60a5fa' : '#6b7280'
                     }}
                     transition={{ type: "spring", stiffness: 500, damping: 30 }}
                 />

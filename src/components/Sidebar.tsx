@@ -26,8 +26,8 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downloadTasks = [] }) => {
-    const [isCollapsed, setIsCollapsed] = useState(false);
-    const { colorMode, toggleColorMode, ftIsTraining, ftProjectName } = useApp();
+    const [isCollapsed, setIsCollapsed] = useState(true);
+    const { colorMode, toggleColorMode, ftIsTraining, ftProjectName, utIsConverting, utConversionLabel, utConversionProgress } = useApp();
     const { state, unloadModel } = useAppState();
     const loadedModels = state.inference.loadedModels;
 
@@ -45,12 +45,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
     };
 
     const navItems = [
-        { view: AppView.Dashboard, label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
-        { view: AppView.Utilities, label: 'Utilities', icon: <Wrench size={20} /> },
-        { view: AppView.DataCollection, label: 'Data Collection', icon: <Database size={20} /> },
-        { view: AppView.FineTuning, label: 'Fine-Tuning', icon: <BrainCircuit size={20} /> },
-        { view: AppView.Inference, label: 'Inference', icon: <MessageSquare size={20} /> },
-        { view: AppView.Logs, label: 'Logs', icon: <TerminalSquare size={20} /> },
+        { view: AppView.Dashboard, label: 'Dashboard', icon: <LayoutDashboard size={24} /> },
+        { view: AppView.Utilities, label: 'Utilities', icon: <Wrench size={24} /> },
+        { view: AppView.DataCollection, label: 'Data Collection', icon: <Database size={24} /> },
+        { view: AppView.FineTuning, label: 'Fine-Tuning', icon: <BrainCircuit size={24} /> },
+        { view: AppView.Inference, label: 'Inference', icon: <MessageSquare size={24} /> },
+        { view: AppView.Logs, label: 'Logs', icon: <TerminalSquare size={24} /> },
     ];
 
     return (
@@ -106,7 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                 >
                     <PanelLeft size={18} />
                 </button>
-                {!isCollapsed && <span className="font-bold text-lg tracking-wider bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">VELOX</span>}
+                {!isCollapsed && <span className="font-bold text-lg tracking-wider bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent"></span>}
             </div>
 
             {/* Navigation */}
@@ -133,7 +133,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                             padding: isCollapsed ? '12px 0' : '12px 16px',
                             borderRadius: '8px',
                             border: currentView === item.view
-                                ? '1px solid rgba(139, 92, 246, 0.25)'
+                                ? '1px solid var(--border-accent)'
                                 : '1px solid transparent',
                             background: currentView === item.view
                                 ? 'var(--bg-highlight, #222230)'
@@ -141,7 +141,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                             boxShadow: currentView === item.view
                                 ? 'inset 0 1px 0 rgba(255,255,255,0.04), 0 2px 8px rgba(0,0,0,0.15)'
                                 : 'none',
-                            color: currentView === item.view ? '#c4b5fd' : '#a1a1aa',
+                            color: currentView === item.view ? 'var(--accent-primary-hover)' : 'var(--text-secondary)',
                             cursor: 'pointer',
                             fontSize: '0.9375rem',
                             fontWeight: currentView === item.view ? 500 : 400,
@@ -171,36 +171,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
             </nav>
 
             {/* Active Status Section */}
-            {!isCollapsed && (
-                <SidebarStatus
-                    loadedModels={loadedModels}
-                    isTraining={ftIsTraining}
-                    projectName={ftProjectName}
-                    isCollapsed={isCollapsed}
-                    onStopModel={handleStopModel}
-                />
-            )}
-            {isCollapsed && (loadedModels.length > 0 || ftIsTraining) && (
-                <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
-                    <SidebarStatus
-                        loadedModels={loadedModels}
-                        isTraining={ftIsTraining}
-                        projectName={ftProjectName}
-                        isCollapsed={isCollapsed}
-                        onStopModel={handleStopModel}
-                    />
-                </div>
-            )}
+            <SidebarStatus
+                loadedModels={loadedModels}
+                isTraining={ftIsTraining}
+                projectName={ftProjectName}
+                isConverting={utIsConverting}
+                conversionLabel={utConversionLabel}
+                conversionProgress={utConversionProgress}
+                isCollapsed={isCollapsed}
+                onStopModel={handleStopModel}
+            />
 
             {/* Downloads Section */}
-            {!isCollapsed && (
-                <SidebarDownloads tasks={downloadTasks} isCollapsed={isCollapsed} />
-            )}
-            {isCollapsed && downloadTasks.length > 0 && (
-                <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
-                    <SidebarDownloads tasks={downloadTasks} isCollapsed={isCollapsed} />
-                </div>
-            )}
+            <SidebarDownloads tasks={downloadTasks} isCollapsed={isCollapsed} />
 
             {/* Settings & Theme Toggle */}
             <div
@@ -241,8 +224,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                         e.currentTarget.style.color = '#a1a1aa';
                     }}
                 >
-                    <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-                        {colorMode === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+                    <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, transition: 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)', transform: colorMode === 'dark' ? 'rotate(0deg)' : 'rotate(180deg)' }}>
+                        {colorMode === 'dark' ? <Sun size={24} /> : <Moon size={24} />}
                     </span>
                     {!isCollapsed && <span>{colorMode === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
                 </button>
@@ -259,7 +242,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                         padding: isCollapsed ? '12px 0' : '12px 16px',
                         borderRadius: '8px',
                         background: 'transparent',
-                        color: currentView === AppView.Settings ? 'white' : '#a1a1aa',
+                        color: currentView === AppView.Settings ? 'var(--accent-primary)' : 'var(--text-secondary)',
                         cursor: 'pointer',
                         border: 'none',
                         width: '100%',
@@ -267,15 +250,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, downl
                     }}
                     onMouseEnter={(e) => {
                         e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
-                        e.currentTarget.style.color = 'white';
+                        e.currentTarget.style.color = 'var(--text-main)';
                     }}
                     onMouseLeave={(e) => {
                         e.currentTarget.style.background = 'transparent';
-                        e.currentTarget.style.color = currentView === AppView.Settings ? 'white' : '#a1a1aa';
+                        e.currentTarget.style.color = currentView === AppView.Settings ? 'var(--accent-primary)' : 'var(--text-secondary)';
                     }}
                 >
                     <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-                        <Settings size={20} />
+                        <Settings size={24} />
                     </span>
                     {!isCollapsed && <span>Settings</span>}
                 </button>

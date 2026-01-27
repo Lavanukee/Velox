@@ -17,7 +17,7 @@
      Dark mode relies heavily on background lightness levels
      to create visual hierarchy and depth perception.
   */
-  --bg-app: #09090b;
+  --bg-app: #0d0d12;
   /* Deepest - main canvas/body */
   --bg-surface: #121216;
   /* Middle - cards, panels, sidebar */
@@ -59,12 +59,10 @@
   --shadow-inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.15);
 
   /* Glow effects for focus states */
-  --shadow-glow-primary: 0 0 0 3px rgba(139, 92, 246, 0.15);
+  --shadow-glow-primary: 0 0 0 3px rgba(59, 130, 246, 0.15);
   --shadow-glow-blue: 0 0 0 3px rgba(59, 130, 246, 0.15);
 
-  /* === BORDER RADII (Consistent Across Components) ===
-     Use these tokens for all rounded corners to maintain visual harmony
-  */
+  /* === BORDER RADII (Consistent Across Components) === */
   --radius-xs: 4px;
   /* Small chips, tags */
   --radius-sm: 8px;
@@ -111,11 +109,10 @@
   /* Text on light backgrounds */
 
   /* === ACCENT COLORS === */
-  --accent-primary: #8b5cf6;
-  /* Purple - main brand */
-  --accent-primary-hover: #a78bfa;
-  /* Purple light */
-  --accent-primary-muted: rgba(139, 92, 246, 0.15);
+  --accent-primary: #3b82f6;
+  /* Blue - main brand */
+  --accent-primary-hover: #60a5fa;
+  --accent-primary-muted: rgba(59, 130, 246, 0.15);
 
   --accent-blue: #3b82f6;
   --accent-blue-hover: #60a5fa;
@@ -137,10 +134,10 @@
   --border-subtle: rgba(255, 255, 255, 0.05);
   --border-default: rgba(255, 255, 255, 0.10);
   --border-strong: rgba(255, 255, 255, 0.15);
-  --border-accent: rgba(139, 92, 246, 0.30);
+  --border-accent: rgba(59, 130, 246, 0.30);
 
   /* === GRADIENTS === */
-  --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  --gradient-primary: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
   --gradient-surface: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-surface) 100%);
 
   /* === COMPONENT-SPECIFIC (Legacy support) === */
@@ -151,7 +148,7 @@
        These variables are used by SplashOverlay and ThemeBackground
     */
   --accent-secondary: #eab308;
-  --accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #3b82f6 50%, #eab308 100%);
+  --accent-gradient: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 50%, #eab308 100%);
   --text-muted: #a1a1aa;
 
   /* === GRADIENT BACKGROUNDS (Subtle light source simulation) === */
@@ -166,7 +163,7 @@
 */
 [data-color-mode="light"] {
   /* Softer background hierarchy - warm grays to avoid eye strain */
-  --bg-app: #f5f5f7;
+  --bg-app: #fafafa;
   --bg-surface: #ffffff;
   --bg-elevated: #fafafa;
   --bg-highlight: #f0f0f2;
@@ -200,7 +197,7 @@
   --border-strong: rgba(0, 0, 0, 0.12);
 
   /* Accent muted - slightly higher opacity for light backgrounds */
-  --accent-primary-muted: rgba(139, 92, 246, 0.08);
+  --accent-primary-muted: rgba(59, 130, 246, 0.08);
   --accent-blue-muted: rgba(59, 130, 246, 0.08);
   --accent-green-muted: rgba(16, 185, 129, 0.08);
   --accent-yellow-muted: rgba(234, 179, 8, 0.10);

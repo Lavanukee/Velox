@@ -126,6 +126,7 @@ impl ModelsState {
 pub struct ProjectLoraInfo {
     pub project_name: String,
     pub checkpoints: Vec<CheckpointInfo>,
+    pub base_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,4 +135,16 @@ pub struct CheckpointInfo {
     pub path: String, // relative path from project root
     pub is_final: bool,
     pub step_number: Option<i32>,
+    pub base_model_name: Option<String>,
+    pub gguf_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistentDownloadTask {
+    pub id: String,
+    pub name: String,
+    pub type_: String, // "model" | "dataset" | etc.
+    pub repo_id: String,
+    pub files: Option<Vec<String>>,
 }

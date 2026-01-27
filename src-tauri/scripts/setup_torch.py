@@ -68,6 +68,7 @@ def install_torch():
             f"torch=={torch_version}+cu{cuda_version}",
             f"torchvision=={torchvision_version}+cu{cuda_version}",
             f"torchaudio=={torchaudio_version}+cu{cuda_version}",
+            "perceptron", # Required for Isaac models
             "--index-url", index_url
         ]
 
@@ -78,7 +79,7 @@ def install_torch():
         
         # Verify
         print("\nVerifying installation...")
-        verify_cmd = [sys.executable, "-c", "import torch; print(f'Torch: {torch.__version__}'); print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}')"]
+        verify_cmd = [sys.executable, "-c", "import torch; import perceptron; print(f'Torch: {torch.__version__}'); print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}')"]
         subprocess.check_call(verify_cmd)
         
     except subprocess.CalledProcessError as e:

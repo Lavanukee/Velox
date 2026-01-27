@@ -1,0 +1,3 @@
+{"instruction": "hello", "output": "world"}
+{"instruction": "image test", "image": "non_existent.jpg", "output": "bad image"}
+{"conversations": [{"role": "user", "content": "good"}], "image": "valid_image.jpg"}

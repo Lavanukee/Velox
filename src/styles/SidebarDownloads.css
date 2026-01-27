@@ -32,13 +32,44 @@
     align-items: center;
     justify-content: center;
     color: #a1a1aa;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-3d-sm);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    margin-top: -10px;
+    /* Offset upward as requested */
+}
+
+.downloads-collapsed-indicator:hover {
+    background: var(--bg-highlight);
+    border-color: var(--border-default);
+    color: var(--text-main);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-3d);
+}
+
+.sidebar-downloads-popout {
+    position: absolute;
+    left: 64px;
+    bottom: 0;
+    width: 280px;
+    background: var(--bg-surface);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    padding: 16px;
+    z-index: 100;
 }
 
 .download-badge {
     position: absolute;
     top: -6px;
     right: -6px;
-    background: linear-gradient(135deg, #a78bfa 0%, #7dd3fc 100%);
+    background: linear-gradient(135deg, #60a5fa 0%, #7dd3fc 100%);
     color: white;
     font-size: 0.65rem;
     font-weight: bold;
@@ -53,7 +84,7 @@
 .downloads-title {
     font-size: 0.85rem;
     font-weight: 600;
-    color: #c4b5fd;
+    color: #93c5fd;
     flex: 1;
 }
 
@@ -82,16 +113,16 @@
 
 /* Download Item */
 .download-item {
-    background: rgba(167, 139, 250, 0.08);
-    border: 1px solid rgba(167, 139, 250, 0.2);
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.2);
     border-radius: 6px;
     padding: 8px;
     transition: all 0.2s;
 }
 
 .download-item:hover {
-    background: rgba(167, 139, 250, 0.12);
-    border-color: rgba(167, 139, 250, 0.3);
+    background: rgba(59, 130, 246, 0.12);
+    border-color: rgba(59, 130, 246, 0.3);
 }
 
 .download-item-header {
@@ -188,8 +219,15 @@
 /* Progress Container */
 .download-progress-container {
     display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.download-progress-row {
+    display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
 }
 
 .download-progress-bar {
@@ -202,17 +240,49 @@
 
 .download-progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #7dd3fc 0%, #a78bfa 100%);
+    background: linear-gradient(90deg, #7dd3fc 0%, #60a5fa 100%);
     transition: width 0.3s ease-out;
     border-radius: 2px;
+}
+
+.download-stats-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    /* Nice for numbers */
 }
 
 .download-progress-text {
     font-size: 0.7rem;
     color: #7dd3fc;
     font-weight: 600;
-    min-width: 28px;
-    text-align: right;
+}
+
+.download-bytes {
+    font-size: 0.65rem;
+    color: #a1a1aa;
+}
+
+.download-extra-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 2px;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.download-speed {
+    font-size: 0.65rem;
+    color: #93c5fd;
+    font-weight: 600;
+}
+
+.download-eta {
+    font-size: 0.65rem;
+    color: #71717a;
+    font-style: italic;
 }
 
 /* Completed/Error Items */

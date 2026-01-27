@@ -79,6 +79,7 @@ body {
     background: var(--bg-app);
     color: var(--text-main);
     overflow: hidden;
+    transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* Base scaling for common elements */
@@ -116,12 +117,12 @@ input[type=number] {
 }
 
 ::-webkit-scrollbar-thumb {
-    background: rgba(139, 92, 246, 0.3);
+    background: rgba(59, 130, 246, 0.3);
     border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(139, 92, 246, 0.5);
+    background: rgba(59, 130, 246, 0.5);
 }
 
 /* Utility Classes */
@@ -143,6 +144,95 @@ input[type=number] {
 
 /* Selection */
 ::selection {
-    background: rgba(167, 139, 250, 0.3);
+    background: rgba(59, 130, 246, 0.3);
     color: white;
+}
+
+/* === CUSTOM RANGE SLIDER === */
+.custom-range {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    outline: none;
+    transition: opacity .2s;
+    cursor: grab;
+    position: relative;
+    z-index: 50;
+    pointer-events: auto !important;
+}
+
+.custom-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #ffffff;
+    cursor: pointer;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+    margin-top: -5px;
+    /* Centers thumb on track */
+    transition: transform 0.1s;
+}
+
+.custom-range::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+}
+
+.custom-range::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 6px;
+    cursor: pointer;
+    background: transparent;
+    border-radius: 3px;
+}
+
+/* Blue Track */
+.custom-range.blue::-webkit-slider-runnable-track {
+    background: linear-gradient(to right, #3b82f6 var(--value-percent, 0%), rgba(255, 255, 255, 0.1) var(--value-percent, 0%));
+}
+
+/* Green Track */
+.custom-range.green::-webkit-slider-runnable-track {
+    background: linear-gradient(to right, #10b981 var(--value-percent, 0%), rgba(255, 255, 255, 0.1) var(--value-percent, 0%));
+}
+
+/* === CUSTOM TOGGLE SWITCH === */
+.toggle-switch {
+    width: 36px;
+    height: 20px;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    position: relative;
+    transition: background-color 0.2s;
+    cursor: pointer;
+}
+
+.toggle-switch.active {
+    background-color: #3b82f6;
+    /* Blue-500 */
+}
+
+.toggle-switch.active-purple {
+    background-color: #a855f7;
+    /* Purple-500 */
+}
+
+.toggle-thumb {
+    width: 16px;
+    height: 16px;
+    background-color: white;
+    border-radius: 50%;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.toggle-switch.active .toggle-thumb,
+.toggle-switch.active-purple .toggle-thumb {
+    transform: translateX(16px);
 }

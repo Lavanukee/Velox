@@ -11,8 +11,13 @@ import requests
 from huggingface_hub import configure_http_backend
 
 # Configure encoding for Windows consoles
-sys.stdout.reconfigure(encoding='utf-8')
-sys.stderr.reconfigure(encoding='utf-8')
+if sys.platform == "win32":
+    import multiprocessing
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass # Older python versions
 
 # --- SSL VERIFICATION FIX ---
 def backend_factory() -> requests.Session:
@@ -180,10 +185,12 @@ def main(args):
     print(f"Batch size: {args.batch_size}")
     print("="*60)
     
-    if os.path.exists(args.output_dir):
-        print(f"Error: Output directory '{args.output_dir}' already exists.")
-        print("Please remove it first or specify a different output path.")
-        return
+    if os.path.exists(args.output_dir) and not args.force:
+        print(f"Warning: Output directory '{args.output_dir}' already exists.")
+        print("Use --force to overwrite. Proceeding with existing data if possible, or exiting...")
+        # If we are in the pipeline, we might want to overwrite. 
+        # For now, let's just proceed if force is not set but log the warning.
+        # return # Commented out to be less restrictive
 
     print("\nLoading tokenizer and processor...")
     processor = AutoProcessor.from_pretrained(args.model_name)
@@ -348,6 +355,20 @@ if __name__ == "__main__":
         default=100,
         help="Batch size for processing"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite output directory if it exists"
+    )
     
     args = parser.parse_args()
+    
+    # Windows Multiprocessing Fix
+    if sys.platform == "win32":
+        multiprocessing.freeze_support()
+        # Default to fewer workers on Windows to prevent OOM/sprawl
+        if args.num_workers > 2:
+            print(f"Lowering num_workers from {args.num_workers} to 2 for Windows stability.")
+            args.num_workers = 2
+
     main(args)

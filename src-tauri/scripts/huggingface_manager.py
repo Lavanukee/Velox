@@ -6,6 +6,23 @@ import requests
 import shutil
 from typing import Optional, List, Dict, Any
 from huggingface_hub import HfApi, configure_http_backend, hf_hub_download
+import tqdm
+
+class CustomTqdm(tqdm.tqdm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # total can be None
+        total = kwargs.get('total')
+        if total:
+            print(f"BYTES_UPDATE:0/{total}", file=sys.stderr)
+            sys.stderr.flush()
+
+    def update(self, n=1):
+        super().update(n)
+        if self.total:
+            print(f"BYTES_UPDATE:{self.n}/{self.total}", file=sys.stderr)
+            sys.stderr.flush()
+
 
 # Configure encoding for Windows consoles
 sys.stdout.reconfigure(encoding='utf-8')
@@ -18,13 +35,40 @@ def get_auth_headers(token: Optional[str]):
     return headers
 
 def cmd_search(args):
-    """Search for models or datasets."""
+    """Search for models or datasets with advanced filtering."""
     api = HfApi(token=args.token)
     
     try:
+        # Build tags filter
+        tags = []
+        if args.modalities:
+            # Map modalities to HF tags
+            for m in args.modalities.split(','):
+                tags.append(m.strip().lower())
+        
+        if args.size and args.type == "dataset":
+            # Map size to size_categories tag
+            # Expected values: '1K', '10K', '100K', '1M', '10M', '100M', '1G'
+            # We map them to the standard HF categories
+            size_map = {
+                '1K': 'size_categories:<1K',
+                '10K': 'size_categories:1K<n<10K',
+                '100K': 'size_categories:10K<n<100K',
+                '1M': 'size_categories:100K<n<1M',
+                '10M': 'size_categories:1M<n<10M',
+                '100M': 'size_categories:10M<n<100M',
+                '1G': 'size_categories:100M<n<1B',
+                '10G': 'size_categories:1B<n<10B',
+            }
+            if args.size in size_map:
+                tags.append(size_map[args.size])
+
         if args.type == "model":
+            # Models might have modality tags too
             results = api.list_models(
                 search=args.query,
+                author=args.author,
+                tags=tags if tags else None,
                 limit=args.limit,
                 sort="downloads",
                 direction=-1,
@@ -33,6 +77,8 @@ def cmd_search(args):
         else:
             results = api.list_datasets(
                 search=args.query,
+                author=args.author,
+                tags=tags if tags else None,
                 limit=args.limit,
                 sort="downloads",
                 direction=-1,
@@ -46,14 +92,15 @@ def cmd_search(args):
                 "name": r.id.split('/')[-1],
                 "downloads": getattr(r, "downloads", 0),
                 "likes": getattr(r, "likes", 0),
-                "author": r.author,
+                "author": r.author if hasattr(r, "author") else r.id.split('/')[0],
                 "tags": getattr(r, "tags", [])
             })
         
         print(json.dumps(output))
         
     except Exception as e:
-        print(json.dumps({"error": str(e)}))
+        import traceback
+        print(json.dumps({"error": str(e), "traceback": traceback.format_exc()}), file=sys.stderr)
         sys.exit(1)
 
 def detect_quantization(filename: str) -> str:
@@ -156,7 +203,8 @@ def cmd_download(args):
                 repo_type=repo_type,
                 token=args.token,
                 local_dir=base_folder,
-                local_dir_use_symlinks=False
+                local_dir_use_symlinks=False,
+                
             )
             print("PROGRESS:100", file=sys.stderr)
             print("Download complete.", file=sys.stderr)
@@ -186,6 +234,7 @@ def cmd_download(args):
                 token=args.token,
                 local_dir=base_folder,
                 local_dir_use_symlinks=False,
+                tqdm_class=CustomTqdm,
             )
             
             # Emit progress update (per file completion)
@@ -1219,6 +1268,9 @@ def main():
     search_parser.add_argument("--type", type=str, choices=["model", "dataset"], default="model")
     search_parser.add_argument("--limit", type=int, default=20)
     search_parser.add_argument("--token", type=str, default=None)
+    search_parser.add_argument("--author", type=str, default=None)
+    search_parser.add_argument("--modalities", type=str, default=None, help="Comma separated modalities")
+    search_parser.add_argument("--size", type=str, default=None, help="Size category for datasets")
 
     # List Files Command
     list_parser = subparsers.add_parser("list")

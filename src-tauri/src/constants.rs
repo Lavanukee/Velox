@@ -5,3 +5,4 @@ pub const SCRIPTS_DIR: &str = "src-tauri/scripts";
 
 pub const HF_TOKEN_FILE: &str = "../hf_token.txt";
 pub const PRESETS_FILE: &str = "../presets.json";
+pub const DOWNLOAD_TASKS_FILE: &str = "../downloads.json";

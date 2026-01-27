@@ -11,6 +11,8 @@ import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { Select } from '../components/Select';
 
+import { PerformanceWidget } from '../components/PerformanceWidget';
+
 import {
     BrainCircuit,
     Play,
@@ -23,8 +25,9 @@ import {
     Plus,
     ExternalLink,
     Database,
-    Check
-} from 'lucide-react'; // Modified lucide-react imports
+    Check,
+    Trash2
+} from 'lucide-react';
 
 interface FineTuningPageProps {
     addLogMessage: (message: string) => void;
@@ -33,7 +36,6 @@ interface FineTuningPageProps {
 
 const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotification }) => {
     const {
-        userMode,
         ftProjectName, setFtProjectName,
         ftSelectedModel: selectedModel, setFtSelectedModel: setSelectedModel,
         ftSelectedDataset: selectedDataset, setFtSelectedDataset: setSelectedDataset,
@@ -56,8 +58,25 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
         ftSetupComplete: setupComplete,
         isConvertingMap,
         resources,
-        runGlobalSetup
+        runGlobalSetup,
+        userFeatures,
+        hardwareInfo
     } = useApp();
+
+    // Eval settings state
+    const [evalSplit, setEvalSplit] = useState(10); // % of data for eval
+    const [evalSteps, setEvalSteps] = useState(100); // Eval every N steps
+
+    // Memory Optimizations
+    const [useCpuOffload, setUseCpuOffload] = useState(false);
+    const [usePagedOptimizer, setUsePagedOptimizer] = useState(true); // Default to on for efficiency
+    const [useGradientCheckpointing, setUseGradientCheckpointing] = useState(true); // Default to on
+
+    // Hybrid Training state (for 24GB VRAM + 80GB RAM hardware)
+    const [hybridTraining, setHybridTraining] = useState(false);
+    const [gpuLayers, setGpuLayers] = useState<number | 'auto'>('auto');
+    const [offloadOptimizer, setOffloadOptimizer] = useState(false);
+    const [useDeepspeed, setUseDeepspeed] = useState(false);
 
     // Resources
     const [availableModels, setAvailableModels] = useState<string[]>([]);
@@ -73,8 +92,13 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
     const [trainingMethod, setTrainingMethod] = useState<'sft' | 'dpo'>('sft');
     const [adapterType, setAdapterType] = useState<'lora' | 'dora'>('lora');
 
-    // Advanced mode toggle (Simple vs Power User)
-    const [advancedMode, setAdvancedMode] = useState(userMode === 'power');
+    // Advanced mode toggle (Simple vs power User)
+    const [advancedMode, setAdvancedMode] = useState(userFeatures.showAdvancedFinetuning);
+
+    // Simplified UI State
+    type IntensityPreset = 'light' | 'medium' | 'heavy' | 'custom';
+    const [trainingPreset, setTrainingPreset] = useState<IntensityPreset>('light');
+    const [modelAdaptation, setModelAdaptation] = useState(15); // Percentage 1-100 mapping to LoRA rank
 
     const formatCount = (num: number | null | undefined): string => {
         if (num === undefined || num === null) return '';
@@ -83,16 +107,91 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
         return (num / 1000000).toFixed(1) + 'M';
     };
 
+    const applyPreset = (preset: string) => {
+        switch (preset) {
+            case 'standard':
+                setHybridTraining(false);
+                setBatchSize(2);
+                setUseCpuOffload(false);
+                setOffloadOptimizer(false);
+                setUseDeepspeed(false);
+                break;
+            case 'hybrid':
+                setHybridTraining(true);
+                setGpuLayers('auto');
+                setBatchSize(8);
+                setOffloadOptimizer(true);
+                setUseCpuOffload(false);
+                setUsePagedOptimizer(true);
+                setUseGradientCheckpointing(true);
+                break;
+            case 'max_speed':
+                setHybridTraining(false);
+                setBatchSize(4);
+                setUseGradientCheckpointing(false);
+                setUseCpuOffload(false);
+                break;
+            case 'max_memory':
+                setHybridTraining(true);
+                setGpuLayers(15);
+                setBatchSize(16);
+                setOffloadOptimizer(true);
+                setUseDeepspeed(true);
+                setUseGradientCheckpointing(true);
+                break;
+        }
+    };
+
     useEffect(() => {
-        setAdvancedMode(userMode === 'power');
-    }, [userMode]);
+        setAdvancedMode(userFeatures.showAdvancedFinetuning);
+    }, [userFeatures.showAdvancedFinetuning]);
+
+    // Simplified Mode Logic: Map Presets to Advanced Params
+    useEffect(() => {
+        if (advancedMode) return; // Don't override if in advanced mode
+
+        // Map Model Adaptation % to LoRA Rank
+        // 1-100 scale mapping roughly to 8-256
+        // Logarithmic-ish scale felt better but linear is less confusing for simplified.
+        // Let's do simple steps: 10%->8, 20%->16, 50%->64, 100%->128+
+        let r = 16;
+        if (modelAdaptation <= 20) r = 8;
+        else if (modelAdaptation <= 40) r = 16;
+        else if (modelAdaptation <= 60) r = 32;
+        else if (modelAdaptation <= 80) r = 64;
+        else r = 128;
+
+        setLoraR(r);
+        setLoraAlpha(r * 2);
+
+        // Map Intensity to Epochs & LR
+        switch (trainingPreset) {
+            case 'light':
+                setNumEpochs(1);
+                setLearningRate(2e-4);
+                break;
+            case 'medium':
+                setNumEpochs(3);
+                setLearningRate(1e-4);
+                break;
+            case 'heavy':
+                setNumEpochs(5); // More epochs needs lower LR usually
+                setLearningRate(5e-5);
+                break;
+            case 'custom':
+                // Do nothing, let values stay
+                break;
+        }
+    }, [trainingPreset, modelAdaptation, advancedMode]);
 
     // Additional hyperparameters (Power User mode)
-    const [gradientAccumulationSteps, setGradientAccumulationSteps] = useState(4);
-    const [warmupRatio, setWarmupRatio] = useState(0.03);
-    const [weightDecay, setWeightDecay] = useState(0.01);
+    const [gradientAccumulationSteps, setGradientAccumulationSteps] = useState<number | string>(4);
+    const [warmupRatio, setWarmupRatio] = useState<number | string>(0.03);
+    const [weightDecay, setWeightDecay] = useState<number | string>(0.01);
     const [optimizer, setOptimizer] = useState<'adamw' | 'adamw_8bit' | 'paged_adamw_8bit'>('adamw_8bit');
     const [lrSchedulerType, setLrSchedulerType] = useState<'linear' | 'cosine' | 'constant'>('linear');
+    const [vramStrategy, setVramStrategy] = useState<'auto' | 'gpu' | 'cpu'>('auto');
+
 
     // UI Local State
     const [tbZoom, setTbZoom] = useState(1);
@@ -111,26 +210,12 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
     // --- Event Listeners ---
     useEffect(() => {
         // Monitor Setup Progress
-        const u1 = listen('setup_progress', (_) => {
+        const unlistenSetup = listen('setup_progress', (_) => {
             // Ignoring setup progress for now
         });
 
-        // Monitor Training Finish
-        const u2 = listen('training_finished', (event: any) => {
-            const { success, code } = event.payload;
-            setIsTraining(false);
-            setTrainingStatus('idle');
-
-            if (success) {
-                addNotification("Training Completed Successfully!", 'success');
-            } else {
-                addNotification(`Training Failed (Exit Code: ${code}). Check logs.`, 'error');
-            }
-        });
-
         return () => {
-            u1.then(f => f());
-            u2.then(f => f());
+            unlistenSetup.then(f => f());
         };
     }, []);
     const [existingProjects, setExistingProjects] = useState<string[]>([]);
@@ -166,6 +251,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
     const loadResources = async () => {
         try {
             const models: string[] = await invoke('list_finetuning_models_command');
+            // Use list_training_projects_command so newly created projects (with just config) show up
             const projects: string[] = await invoke('list_training_projects_command');
             setAvailableModels(models);
             setExistingProjects(projects);
@@ -221,6 +307,74 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
         }
     };
 
+    // --- Persistence Logic ---
+    useEffect(() => {
+        if (!ftProjectName) return;
+
+        // Only load if it's an existing project
+        if (existingProjects.includes(ftProjectName)) {
+            invoke('load_project_config_command', { projectName: ftProjectName })
+                .then((config: any) => {
+                    if (config && Object.keys(config).length > 0) {
+                        // Apply loaded config
+                        if (config.modelPath) setSelectedModel(config.modelPath);
+
+                        // Restore Datasets
+                        if (config.datasetPaths && Array.isArray(config.datasetPaths) && config.datasetPaths.length > 0) {
+                            if (config.datasetPaths.length === 1) {
+                                setSelectedDataset(config.datasetPaths[0]);
+                                setSelectedDatasets([]);
+                                // Check if it looks like a local path (absolute path)
+                                if (config.datasetPaths[0].includes('/') || config.datasetPaths[0].includes('\\')) {
+                                    if (config.datasetPaths[0].includes(':') || config.datasetPaths[0].startsWith('/')) {
+                                        setLocalDatasetPath(config.datasetPaths[0]);
+                                    }
+                                }
+                            } else {
+                                setSelectedDatasets(config.datasetPaths);
+                                setSelectedDataset(config.datasetPaths[0]); // Primary
+                            }
+                        }
+
+                        if (config.numEpochs) setNumEpochs(config.numEpochs);
+                        if (config.batchSize) setBatchSize(config.batchSize);
+                        if (config.learningRate) setLearningRate(config.learningRate);
+                        if (config.loraR) setLoraR(config.loraR);
+                        if (config.loraAlpha) setLoraAlpha(config.loraAlpha);
+                        if (config.maxSeqLength) setMaxSeqLength(config.maxSeqLength);
+
+                        if (config.gradientAccumulationSteps) setGradientAccumulationSteps(config.gradientAccumulationSteps);
+                        if (config.warmupRatio) setWarmupRatio(config.warmupRatio);
+                        if (config.weightDecay) setWeightDecay(config.weightDecay);
+                        if (config.optimizer) setOptimizer(config.optimizer);
+                        if (config.lrSchedulerType) setLrSchedulerType(config.lrSchedulerType);
+
+                        if (config.trainingMethod) setTrainingMethod(config.trainingMethod);
+                        if (config.adapterType) setAdapterType(config.adapterType);
+
+                        if (config.advancedMode !== undefined) setAdvancedMode(config.advancedMode);
+                        if (config.evalSplit !== undefined) setEvalSplit(config.evalSplit);
+                        if (config.evalSteps !== undefined) setEvalSteps(config.evalSteps);
+                        if (config.trainingPreset) setTrainingPreset(config.trainingPreset);
+                        if (config.modelAdaptation) setModelAdaptation(config.modelAdaptation);
+                        if (config.vramStrategy) setVramStrategy(config.vramStrategy);
+
+                        // Optimizations
+                        if (config.useCpuOffload !== undefined) setUseCpuOffload(config.useCpuOffload);
+                        if (config.usePagedOptimizer !== undefined) setUsePagedOptimizer(config.usePagedOptimizer);
+                        if (config.useGradientCheckpointing !== undefined) setUseGradientCheckpointing(config.useGradientCheckpointing);
+                        if (config.hybridTraining !== undefined) setHybridTraining(config.hybridTraining);
+                        if (config.gpuLayers !== undefined) setGpuLayers(config.gpuLayers);
+                        if (config.offloadOptimizer !== undefined) setOffloadOptimizer(config.offloadOptimizer);
+                        if (config.useDeepspeed !== undefined) setUseDeepspeed(config.useDeepspeed);
+
+                        addNotification(`Loaded config for ${ftProjectName}`, 'success');
+                    }
+                })
+                .catch(err => console.error("Failed to load project config:", err));
+        }
+    }, [ftProjectName, existingProjects]);
+
     const handleStartTraining = async () => {
         if (!ftProjectName.trim()) {
             addNotification('Please enter a project name', 'error');
@@ -244,6 +398,47 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             return;
         }
 
+        // Save Configuration Persistence
+        const currentConfig = {
+            modelPath: selectedModel,
+            datasetPaths: datasetsToUse,
+            numEpochs: numEpochs, // keep as is (num or str)
+            batchSize: batchSize,
+            learningRate: learningRate,
+            loraR: loraR,
+            loraAlpha: loraAlpha,
+            maxSeqLength: maxSeqLength,
+            gradientAccumulationSteps: gradientAccumulationSteps,
+            warmupRatio: warmupRatio,
+            weightDecay: weightDecay,
+            optimizer,
+            lrSchedulerType,
+            trainingMethod,
+            adapterType,
+            useCpuOffload,
+            usePagedOptimizer,
+            useGradientCheckpointing,
+            hybridTraining,
+            gpuLayers,
+            offloadOptimizer,
+            useDeepspeed,
+            advancedMode,
+            evalSplit,
+            evalSteps,
+            trainingPreset,
+            modelAdaptation,
+            vramStrategy
+        };
+
+        try {
+            await invoke('save_project_config_command', {
+                projectName: ftProjectName.trim(),
+                config: currentConfig
+            });
+        } catch (e) {
+            console.error("Failed to save config persistence:", e);
+        }
+
         setIsTraining(true);
         setTrainingStatus('initializing');
         setInitMessage('Starting process...');
@@ -255,20 +450,34 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                 projectName: ftProjectName.trim(),
                 modelPath: selectedModel,
                 datasetPaths: datasetsToUse,  // Changed to array
-                numEpochs,
-                batchSize,
-                learningRate,
-                loraR,
-                loraAlpha,
-                maxSeqLength,
+                numEpochs: Number(numEpochs) || 1,
+                batchSize: Number(batchSize) || 1,
+                learningRate: Number(learningRate) || 2e-4,
+                loraR: Number(loraR) || 16,
+                loraAlpha: Number(loraAlpha) || 32,
+                maxSeqLength: Number(maxSeqLength) || 2048,
                 // New optional parameters
                 trainingMethod: trainingMethod,
                 adapterType: adapterType,
-                gradientAccumulationSteps: advancedMode ? gradientAccumulationSteps : undefined,
-                warmupRatio: advancedMode ? warmupRatio : undefined,
-                weightDecay: advancedMode ? weightDecay : undefined,
+                gradientAccumulationSteps: advancedMode ? (Number(gradientAccumulationSteps) || 1) : undefined,
+                warmupRatio: advancedMode ? (Number(warmupRatio) || 0.03) : undefined,
+                weightDecay: advancedMode ? (Number(weightDecay) || 0.01) : undefined,
                 optimizer: advancedMode ? optimizer : undefined,
                 lrSchedulerType: advancedMode ? lrSchedulerType : undefined,
+
+                // Eval & Memory Settings
+                evalSplit: evalSplit / 100, // Convert % to ratio
+                evalSteps,
+                useCpuOffload,
+                usePagedOptimizer,
+                useGradientCheckpointing,
+
+                // Hybrid Settings
+                hybridTraining,
+                gpuLayers: gpuLayers === 'auto' ? null : gpuLayers,
+                offloadOptimizer,
+                useDeepspeed,
+                vramStrategy,
             });
 
             const port = (result as any).tensorboard_port;
@@ -312,6 +521,23 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             addNotification('Environment setup complete', 'success');
         } catch (error) {
             addNotification('Setup failed', 'error');
+        }
+    };
+
+    const handleDeleteProject = async () => {
+        if (!ftProjectName) return;
+        // removed confirm dialog as per user request
+
+        try {
+            await invoke('delete_project_command', { projectName: ftProjectName });
+            addNotification(`Project ${ftProjectName} deleted`, 'success');
+            setFtProjectName('');
+            // Refresh projects list
+            const projectsInfo: any[] = await invoke('list_loras_by_project_command');
+            const projects = projectsInfo.map((p: any) => p.project_name);
+            setExistingProjects(projects);
+        } catch (error) {
+            addNotification(`Failed to delete project: ${error}`, 'error');
         }
     };
 
@@ -408,10 +634,43 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
             </div>
 
             {activeTab === 'config' && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px' }}>
-                    {/* Left Column: Selection */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                    {/* Left Column: Selection + Estimation */}
                     <div className="space-y-6" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                        <Card style={{ position: 'relative', zIndex: 30 }}>
+
+                        <PerformanceWidget
+                            modelPath={selectedModel}
+                            numEpochs={Number(numEpochs) || 1}
+                            batchSize={Number(batchSize) || 1}
+                            loraR={Number(loraR) || 16}
+                            loraAlpha={Number(loraAlpha) || 32}
+                            maxSeqLength={Number(maxSeqLength) || 2048}
+                            totalSamples={(
+                                selectedDatasets.length > 0 ? selectedDatasets : (selectedDataset ? [selectedDataset] : [])
+                            ).reduce((sum, dsPath) => sum + (resources.find(r => r.path === dsPath)?.count || 0), 0)}
+                            gradientAccumulation={Number(gradientAccumulationSteps) || 1}
+                            useCpuOffload={useCpuOffload}
+                            setUseCpuOffload={setUseCpuOffload}
+                            usePagedOptimizer={usePagedOptimizer}
+                            setUsePagedOptimizer={setUsePagedOptimizer}
+                            useGradientCheckpointing={useGradientCheckpointing}
+                            setUseGradientCheckpointing={setUseGradientCheckpointing}
+                            hybridTraining={hybridTraining}
+                            setHybridTraining={setHybridTraining}
+                            gpuLayers={gpuLayers}
+                            setGpuLayers={setGpuLayers}
+                            offloadOptimizer={offloadOptimizer}
+                            setOffloadOptimizer={setOffloadOptimizer}
+                            useDeepspeed={useDeepspeed}
+                            setUseDeepspeed={setUseDeepspeed}
+                            setBatchSize={setBatchSize}
+                            setLoraR={setLoraR}
+                            setLoraAlpha={setLoraAlpha}
+                            onPresetChange={applyPreset}
+                            hardwareInfo={hardwareInfo || undefined}
+                        />
+
+                        <Card style={{ position: 'relative', zIndex: 40, marginTop: '16px' }}>
                             <div className="flex items-center gap-3 mb-4">
                                 <BrainCircuit className="text-accent-primary" size={24} />
                                 <h3 className="text-lg font-semibold">Model Selection</h3>
@@ -430,8 +689,8 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                         fontSize: '13px',
                                         fontWeight: 500,
                                         border: 'none',
-                                        background: !hfModelId ? 'rgba(167, 139, 250, 0.15)' : 'transparent',
-                                        color: !hfModelId ? '#a78bfa' : '#9ca3af',
+                                        background: !hfModelId ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                                        color: !hfModelId ? '#60a5fa' : '#9ca3af',
                                         borderRadius: '6px',
                                         cursor: 'pointer',
                                         transition: 'all 0.2s'
@@ -450,8 +709,8 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                         fontSize: '13px',
                                         fontWeight: 500,
                                         border: 'none',
-                                        background: hfModelId ? 'rgba(167, 139, 250, 0.15)' : 'transparent',
-                                        color: hfModelId ? '#a78bfa' : '#9ca3af',
+                                        background: hfModelId ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                                        color: hfModelId ? '#60a5fa' : '#9ca3af',
                                         borderRadius: '6px',
                                         cursor: 'pointer',
                                         transition: 'all 0.2s'
@@ -495,7 +754,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                             </div>
                         </Card>
 
-                        <Card>
+                        <Card style={{ position: 'relative', zIndex: 30 }}>
                             <div className="flex items-center gap-3 mb-4">
                                 <Database className="text-accent-secondary" size={24} />
                                 <h3 className="text-lg font-semibold">Dataset Selection</h3>
@@ -576,10 +835,10 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                         <div style={{
                                             maxHeight: '200px',
                                             overflowY: 'auto',
-                                            background: 'rgba(0,0,0,0.2)',
+                                            background: 'var(--bg-input, rgba(0,0,0,0.2))',
                                             borderRadius: '8px',
                                             padding: '8px',
-                                            border: '1px solid rgba(255,255,255,0.1)'
+                                            border: '1px solid var(--border-default, rgba(255,255,255,0.1))'
                                         }}>
                                             {availableDatasets.length === 0 ? (
                                                 <div style={{ padding: '16px', textAlign: 'center', color: '#9ca3af', fontSize: '13px' }}>
@@ -596,9 +855,11 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                                             padding: '8px 12px',
                                                             cursor: 'pointer',
                                                             borderRadius: '6px',
-                                                            background: selectedDatasets.includes(dataset) ? 'rgba(59,130,246,0.1)' : 'transparent',
-                                                            border: selectedDatasets.includes(dataset) ? '1px solid rgba(59,130,246,0.3)' : '1px solid transparent',
-                                                            marginBottom: '4px'
+                                                            background: selectedDatasets.includes(dataset) ? 'var(--accent-blue-muted, rgba(59,130,246,0.1))' : 'transparent',
+                                                            border: selectedDatasets.includes(dataset) ? '1px solid var(--accent-blue, rgba(59,130,246,0.3))' : '1px solid transparent',
+                                                            marginBottom: '4px',
+                                                            transition: 'all 0.2s',
+                                                            color: selectedDatasets.includes(dataset) ? 'var(--accent-blue)' : 'var(--text-main)'
                                                         }}
                                                     >
                                                         <div
@@ -608,8 +869,8 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                                                 minWidth: '20px',
                                                                 minHeight: '20px',
                                                                 borderRadius: '4px',
-                                                                border: selectedDatasets.includes(dataset) ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.2)',
-                                                                background: selectedDatasets.includes(dataset) ? '#3b82f6' : 'transparent',
+                                                                border: selectedDatasets.includes(dataset) ? '1px solid var(--accent-blue)' : '1px solid var(--border-strong, rgba(255,255,255,0.2))',
+                                                                background: selectedDatasets.includes(dataset) ? 'var(--accent-blue)' : 'transparent',
                                                                 display: 'flex',
                                                                 alignItems: 'center',
                                                                 justifyContent: 'center',
@@ -652,7 +913,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                                                         </span>
                                                                     )}
                                                                     {r?.modalities?.map(m => (
-                                                                        <span key={m} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: m === 'Vision' ? 'rgba(167, 139, 250, 0.2)' : 'rgba(255,255,255,0.1)', color: m === 'Vision' ? '#c4b5fd' : '#9ca3af' }}>
+                                                                        <span key={m} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: m === 'Vision' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255,255,255,0.1)', color: m === 'Vision' ? '#60a5fa' : '#9ca3af' }}>
                                                                             {m}
                                                                         </span>
                                                                     ))}
@@ -665,7 +926,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                         </div>
                                         {selectedDatasets.length > 1 && (
                                             <p className="text-xs text-secondary mt-2" style={{ color: '#60a5fa' }}>
-                                                ℹ️ Multiple datasets will be merged and shuffled during training
+                                                ℹ️ Multiple datasets will be combined for training
                                             </p>
                                         )}
                                     </div>
@@ -713,7 +974,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
 
                     {/* Right Column: Parameters */}
                     <div className="space-y-6" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                        <Card>
+                        <Card style={{ position: 'relative', zIndex: 35 }}>
                             <div className="flex items-center gap-3 mb-4">
                                 <BrainCircuit className="text-blue-500" size={24} />
                                 <h3 className="text-lg font-semibold">Project Name</h3>
@@ -721,15 +982,29 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
 
                             {existingProjects.length > 0 && (
                                 <>
-                                    <Select
-                                        label="Select Existing Project"
-                                        options={[
-                                            { value: '', label: 'Create new project...' },
-                                            ...existingProjects.map(p => ({ value: p, label: p }))
-                                        ]}
-                                        value={existingProjects.includes(ftProjectName) ? ftProjectName : ''}
-                                        onChange={(val) => setFtProjectName(val)}
-                                    />
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+                                        <div style={{ flex: 1 }}>
+                                            <Select
+                                                label="Select Existing Project"
+                                                options={[
+                                                    { value: '', label: 'Create new project...' },
+                                                    ...existingProjects.map(p => ({ value: p, label: p }))
+                                                ]}
+                                                value={existingProjects.includes(ftProjectName) ? ftProjectName : ''}
+                                                onChange={(val) => setFtProjectName(val)}
+                                            />
+                                        </div>
+                                        {ftProjectName && existingProjects.includes(ftProjectName) && (
+                                            <Button
+                                                variant="secondary"
+                                                onClick={handleDeleteProject}
+                                                style={{ height: '40px', width: '40px', padding: 0 }}
+                                                title="Delete Project"
+                                            >
+                                                <Trash2 size={16} />
+                                            </Button>
+                                        )}
+                                    </div>
                                     <div className="relative my-3">
                                         <div className="absolute inset-0 flex items-center">
                                             <div className="w-full border-t border-white/10"></div>
@@ -753,10 +1028,10 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                         </Card>
 
                         {/* Training Options */}
-                        <Card>
+                        <Card style={{ position: 'relative', zIndex: 25 }}>
                             <div className="flex items-center justify-between mb-4">
                                 <div className="flex items-center gap-3">
-                                    <Activity className="text-purple-500" size={24} />
+                                    <Activity className="text-blue-500" size={24} />
                                     <h3 className="text-lg font-semibold">Training Options</h3>
                                 </div>
                                 <div
@@ -777,19 +1052,19 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                         overflow: 'hidden'
                                     }}
                                 >
-                                    {/* Sliding Purple Glass */}
+                                    {/* Sliding Glass Reveal */}
                                     <div style={{
                                         position: 'absolute',
                                         left: advancedMode ? 'calc(50% + 2px)' : '4px',
                                         width: 'calc(50% - 6px)',
                                         height: 'calc(100% - 8px)',
-                                        background: 'rgba(139, 92, 246, 0.3)',
+                                        background: 'rgba(59, 130, 246, 0.3)',
                                         backdropFilter: 'blur(8px)',
-                                        boxShadow: '0 0 15px rgba(139, 92, 246, 0.2)',
+                                        boxShadow: '0 0 15px rgba(59, 130, 246, 0.2)',
                                         borderRadius: '8px',
                                         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                                         zIndex: 1,
-                                        border: '1px solid rgba(139, 92, 246, 0.4)'
+                                        border: '1px solid rgba(59, 130, 246, 0.4)'
                                     }} />
 
                                     <div style={{
@@ -817,50 +1092,58 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
 
                             {/* Training Method Toggle */}
                             <div style={{ marginBottom: '16px' }}>
-                                <label className="text-sm font-medium mb-2 block">Training Method</label>
+                                <label style={{ fontSize: '13px', fontWeight: 500, marginBottom: '8px', display: 'block', color: 'var(--text-muted)' }}>Training Method</label>
                                 <div style={{ display: 'flex', gap: '8px' }}>
                                     <button
                                         onClick={() => setTrainingMethod('sft')}
                                         style={{
                                             flex: 1,
-                                            padding: '10px 16px',
+                                            padding: '8px 12px',
                                             fontSize: '13px',
                                             fontWeight: 500,
                                             border: trainingMethod === 'sft' ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.1)',
-                                            background: trainingMethod === 'sft' ? 'rgba(59,130,246,0.15)' : 'rgba(255,255,255,0.03)',
+                                            background: trainingMethod === 'sft' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255,255,255,0.03)',
                                             color: trainingMethod === 'sft' ? '#60a5fa' : '#9ca3af',
-                                            borderRadius: '8px',
+                                            borderRadius: '6px',
                                             cursor: 'pointer',
-                                            transition: 'all 0.2s'
+                                            transition: 'all 0.2s',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            alignItems: 'center',
+                                            gap: '2px'
                                         }}
                                     >
-                                        <div style={{ fontWeight: 600 }}>SFT</div>
-                                        <div style={{ fontSize: '11px', opacity: 0.7 }}>Supervised Fine-Tuning</div>
+                                        <div style={{ fontWeight: 600 }}>Standard (SFT)</div>
+                                        <div style={{ fontSize: '10px', opacity: 0.7 }}>Supervised Fine-Tuning</div>
                                     </button>
                                     <button
                                         onClick={() => setTrainingMethod('dpo')}
                                         style={{
                                             flex: 1,
-                                            padding: '10px 16px',
+                                            padding: '8px 12px',
                                             fontSize: '13px',
                                             fontWeight: 500,
-                                            border: trainingMethod === 'dpo' ? '1px solid #8b5cf6' : '1px solid rgba(255,255,255,0.1)',
-                                            background: trainingMethod === 'dpo' ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.03)',
-                                            color: trainingMethod === 'dpo' ? '#a78bfa' : '#9ca3af',
-                                            borderRadius: '8px',
+                                            border: trainingMethod === 'dpo' ? '1px solid #ec4899' : '1px solid rgba(255,255,255,0.1)',
+                                            background: trainingMethod === 'dpo' ? 'rgba(236, 72, 153, 0.15)' : 'rgba(255,255,255,0.03)',
+                                            color: trainingMethod === 'dpo' ? '#f472b6' : '#9ca3af',
+                                            borderRadius: '6px',
                                             cursor: 'pointer',
-                                            transition: 'all 0.2s'
+                                            transition: 'all 0.2s',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            alignItems: 'center',
+                                            gap: '2px'
                                         }}
                                     >
                                         <div style={{ fontWeight: 600 }}>DPO</div>
-                                        <div style={{ fontSize: '11px', opacity: 0.7 }}>Preference Optimization</div>
+                                        <div style={{ fontSize: '10px', opacity: 0.7 }}>Preference Optimization</div>
                                     </button>
                                 </div>
                             </div>
 
                             {/* Adapter Type Toggle */}
                             <div>
-                                <label className="text-sm font-medium mb-2 block">Adapter Type</label>
+                                <label style={{ fontSize: '13px', fontWeight: 500, marginBottom: '8px', display: 'block', color: 'var(--text-muted)' }}>Adapter Type</label>
                                 <div style={{ display: 'flex', gap: '8px' }}>
                                     <button
                                         onClick={() => setAdapterType('lora')}
@@ -902,57 +1185,198 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                             </div>
                         </Card>
 
-                        <Card>
-                            <div className="flex items-center gap-3 mb-4">
-                                <Activity className="text-green-500" size={24} />
-                                <h3 className="text-lg font-semibold">Training Parameters</h3>
+                        <Card style={{ position: 'relative', zIndex: 10 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                                <Activity style={{ color: 'var(--accent-green)' }} size={24} />
+                                <h3 style={{ fontSize: '18px', fontWeight: 600, margin: 0 }}>Training Parameters</h3>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                <Input
-                                    label="Epochs"
-                                    type="number"
-                                    value={numEpochs}
-                                    onChange={(e) => setNumEpochs(Number(e.target.value))}
-                                    tooltip="Number of times to iterate over the entire dataset."
-                                />
-                                <Input
-                                    label="Batch Size"
-                                    type="number"
-                                    value={batchSize}
-                                    onChange={(e) => setBatchSize(Number(e.target.value))}
-                                    tooltip="Total number of samples processed per gradient update."
-                                />
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                {!advancedMode && (
+                                    <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                        {/* Simplified Controls */}
+                                        <div>
+                                            <label style={{ fontSize: '13px', fontWeight: 500, marginBottom: '12px', display: 'block', color: 'var(--text-muted)' }}>Training Intensity</label>
+                                            <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '8px' }}>
+                                                {(['light', 'medium', 'heavy'] as const).map((preset) => (
+                                                    <button
+                                                        key={preset}
+                                                        onClick={() => setTrainingPreset(preset)}
+                                                        style={{
+                                                            flex: 1,
+                                                            padding: '12px 16px',
+                                                            borderRadius: '6px',
+                                                            fontSize: '13px',
+                                                            fontWeight: 600,
+                                                            transition: 'all 0.2s',
+                                                            border: '1px solid transparent',
+                                                            cursor: 'pointer',
+                                                            background: trainingPreset === preset ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                                                            color: trainingPreset === preset ? '#60a5fa' : '#9ca3af',
+                                                            borderColor: trainingPreset === preset ? 'rgba(59, 130, 246, 0.3)' : 'transparent',
+                                                            boxShadow: trainingPreset === preset ? '0 0 15px rgba(59, 130, 246, 0.1)' : 'none'
+                                                        }}
+                                                    >
+                                                        <div style={{ textTransform: 'capitalize', fontSize: '15px', marginBottom: '2px' }}>{preset}</div>
+                                                        <div style={{ fontSize: '10px', opacity: 0.6, fontWeight: 400 }}>
+                                                            {preset === 'light' && 'Fast • 1 Epoch'}
+                                                            {preset === 'medium' && 'Balanced • 3 Epochs'}
+                                                            {preset === 'heavy' && 'Thorough • 5 Epochs'}
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
 
-                                {userMode === 'power' && (
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'center' }}>
+                                                <label style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-muted)' }}>Model Adaptation Strength</label>
+                                                <span style={{
+                                                    fontSize: '11px',
+                                                    color: '#60a5fa',
+                                                    fontFamily: 'monospace',
+                                                    background: 'rgba(59, 130, 246, 0.1)',
+                                                    padding: '2px 8px',
+                                                    borderRadius: '4px'
+                                                }}>
+                                                    {modelAdaptation}%
+                                                </span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="1"
+                                                max="100"
+                                                value={modelAdaptation}
+                                                onChange={(e) => setModelAdaptation(Number(e.target.value))}
+                                                style={{ width: '100%', accentColor: '#3b82f6', height: '6px', cursor: 'pointer' }}
+                                            />
+                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px', opacity: 0.7 }}>
+                                                Higher values allow the model to learn more complex patterns but increase memory usage.
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {advancedMode && (
+                                    <>
+                                        <Input
+                                            label="Epochs"
+                                            type="number"
+                                            value={numEpochs}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val === '') setNumEpochs('');
+                                                else setNumEpochs(Number(val));
+                                            }}
+                                            onBlur={(e) => {
+                                                if (e.target.value === '' || Number(e.target.value) < 1) {
+                                                    setNumEpochs(1);
+                                                }
+                                            }}
+                                            tooltip="Number of times to iterate over the entire dataset."
+                                        />
+                                        <Input
+                                            label="Batch Size"
+                                            type="number"
+                                            value={batchSize}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val === '') setBatchSize('');
+                                                else setBatchSize(Number(val));
+                                            }}
+                                            onBlur={(e) => {
+                                                if (e.target.value === '' || Number(e.target.value) < 1) {
+                                                    setBatchSize(1);
+                                                }
+                                            }}
+                                            tooltip="Total number of samples processed per gradient update."
+                                        />
+                                        <Input
+                                            label="Eval Split %"
+                                            type="number"
+                                            value={evalSplit}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val === '') return;
+                                                const num = Number(val);
+                                                if (!isNaN(num) && num >= 0 && num <= 50) {
+                                                    setEvalSplit(num);
+                                                }
+                                            }}
+                                            onBlur={(e) => {
+                                                if (e.target.value === '' || Number(e.target.value) < 0) {
+                                                    setEvalSplit(10);
+                                                }
+                                            }}
+                                            tooltip="Percentage of dataset to reserve for evaluation. Set to 0 to disable."
+                                        />
+                                        <Input
+                                            label="Eval Steps"
+                                            type="number"
+                                            value={evalSteps}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val === '') return;
+                                                const num = Number(val);
+                                                if (!isNaN(num) && num >= 0) {
+                                                    setEvalSteps(num);
+                                                }
+                                            }}
+                                            onBlur={(e) => {
+                                                if (e.target.value === '' || Number(e.target.value) < 1) {
+                                                    setEvalSteps(100);
+                                                }
+                                            }}
+                                            tooltip="Run evaluation every N training steps."
+                                        />
+                                    </>
+                                )}
+
+                                {advancedMode && userFeatures.showAdvancedFinetuning && (
                                     <>
                                         <Input
                                             label="Learning Rate"
                                             type="number"
                                             step="0.00001"
                                             value={learningRate}
-                                            onChange={(e) => setLearningRate(Number(e.target.value))}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val === '') setLearningRate('');
+                                                else setLearningRate(Number(val));
+                                            }}
                                             tooltip="Step size for model updates. Too high can cause instability, too low is slow."
                                         />
                                         <Input
                                             label="Max Seq Length"
                                             type="number"
                                             value={maxSeqLength}
-                                            onChange={(e) => setMaxSeqLength(Number(e.target.value))}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val === '') setMaxSeqLength('');
+                                                else setMaxSeqLength(Number(val));
+                                            }}
                                             tooltip="Maximum number of tokens the model processes at once (Context Window)."
                                         />
                                         <Input
                                             label="LoRA R"
                                             type="number"
                                             value={loraR}
-                                            onChange={(e) => setLoraR(Number(e.target.value))}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val === '') setLoraR('');
+                                                else setLoraR(Number(val));
+                                            }}
                                             tooltip="The rank of the low-rank adapters. Higher values increase model capacity but use more memory."
                                         />
                                         <Input
                                             label="LoRA Alpha"
                                             type="number"
                                             value={loraAlpha}
-                                            onChange={(e) => setLoraAlpha(Number(e.target.value))}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val === '') setLoraAlpha('');
+                                                else setLoraAlpha(Number(val));
+                                            }}
                                             tooltip="Scaling factor for LoRA weights. Common practice is to set it to 2x the Rank."
                                         />
 
@@ -962,7 +1386,11 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                                     label="Grad Accum"
                                                     type="number"
                                                     value={gradientAccumulationSteps}
-                                                    onChange={(e) => setGradientAccumulationSteps(Number(e.target.value))}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        if (val === '') setGradientAccumulationSteps('');
+                                                        else setGradientAccumulationSteps(Number(val));
+                                                    }}
                                                     tooltip="Number of steps to accumulate gradients before updating weights. Helps with memory constraints."
                                                 />
                                                 <Input
@@ -970,7 +1398,11 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                                     type="number"
                                                     step="0.01"
                                                     value={warmupRatio}
-                                                    onChange={(e) => setWarmupRatio(Number(e.target.value))}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        if (val === '') setWarmupRatio('');
+                                                        else setWarmupRatio(Number(val));
+                                                    }}
                                                     tooltip="Fraction of total training steps to increase learning rate linearly."
                                                 />
                                                 <Input
@@ -978,9 +1410,14 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                                     type="number"
                                                     step="0.01"
                                                     value={weightDecay}
-                                                    onChange={(e) => setWeightDecay(Number(e.target.value))}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        if (val === '') setWeightDecay('');
+                                                        else setWeightDecay(Number(val));
+                                                    }}
                                                     tooltip="Regularization technique that helps prevent overfitting by penalizing large weights."
                                                 />
+
                                                 <Select
                                                     label="Optimizer"
                                                     options={[
@@ -1009,7 +1446,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                                 )}
                             </div>
 
-                            {userMode === 'user' && (
+                            {!userFeatures.showAdvancedFinetuning && (
                                 <p className="text-xs text-gray-500 mt-4 text-center">
                                     Switch to Power User mode for advanced hyperparameters (LR, LoRA, etc.)
                                 </p>
@@ -1039,7 +1476,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                         background: 'linear-gradient(135deg, rgba(28, 28, 36, 0.6) 0%, rgba(30, 28, 38, 0.6) 100%)',
                         padding: '16px',
                         borderRadius: '16px',
-                        border: '1px solid rgba(167, 139, 250, 0.2)'
+                        border: '1px solid rgba(59, 130, 246, 0.2)'
                     }}>
                         <div className="flex items-center gap-3">
                             <div
@@ -1115,7 +1552,7 @@ const FineTuningPage: React.FC<FineTuningPageProps> = ({ addLogMessage, addNotif
                         <div
                             className="flex-1 flex items-center justify-center border border-dashed rounded-2xl"
                             style={{
-                                borderColor: 'rgba(167, 139, 250, 0.2)',
+                                borderColor: 'rgba(59, 130, 246, 0.2)',
                                 borderRadius: '16px',
                                 background: 'linear-gradient(135deg, rgba(28, 28, 36, 0.3) 0%, rgba(30, 28, 38, 0.3) 100%)'
                             }}

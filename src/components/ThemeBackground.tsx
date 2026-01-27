@@ -8,8 +8,8 @@ export const CyberBackground: React.FC = () => (
     }}>
         <div style={{
             position: 'absolute', inset: 0,
-            backgroundImage: `linear-gradient(rgba(139, 92, 246, 0.1) 1px, transparent 1px), 
-                              linear-gradient(90deg, rgba(139, 92, 246, 0.1) 1px, transparent 1px)`,
+            backgroundImage: `linear-gradient(rgba(59, 130, 246, 0.1) 1px, transparent 1px), 
+                              linear-gradient(90deg, rgba(59, 130, 246, 0.1) 1px, transparent 1px)`,
             backgroundSize: '40px 40px',
             maskImage: 'radial-gradient(circle at center, black 0%, transparent 80%)'
         }} />
@@ -21,7 +21,7 @@ export const CyberBackground: React.FC = () => (
             transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
             style={{
                 position: 'absolute', inset: 0,
-                background: 'radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.15), transparent 60%)'
+                background: 'radial-gradient(circle at 50% 50%, rgba(59, 130, 246, 0.15), transparent 60%)'
             }}
         />
     </div>

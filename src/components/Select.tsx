@@ -9,6 +9,11 @@ export interface Option {
     tags?: string[];
     hasVision?: boolean;
     engine?: 'GGUF' | 'Base';
+    actions?: {
+        icon: React.ReactNode;
+        onClick: (e: React.MouseEvent) => void;
+        tooltip?: string;
+    }[];
 }
 
 interface SelectProps {
@@ -136,7 +141,7 @@ export const Select: React.FC<SelectProps> = ({
                             border: '1px solid var(--border-default, rgba(255,255,255,0.1))',
                             borderRadius: 'var(--radius-md, 12px)',
                             boxShadow: 'var(--shadow-lg, 0 20px 40px rgba(0,0,0,0.3))',
-                            zIndex: 2000,
+                            zIndex: 9999,
                             padding: '8px',
                             left: 0,
                             display: 'flex',
@@ -181,7 +186,7 @@ export const Select: React.FC<SelectProps> = ({
                                         borderRadius: 'var(--radius-sm, 8px)',
                                         cursor: 'pointer',
                                         fontSize: '14px',
-                                        color: option.value === value ? 'var(--accent-primary-hover, #a78bfa)' : 'var(--text-main, #e4e4e7)',
+                                        color: option.value === value ? 'var(--accent-primary-hover, #60a5fa)' : 'var(--text-main, #e4e4e7)',
                                         background: option.value === value ? 'var(--accent-primary-muted, rgba(139,92,246,0.15))' : 'transparent',
                                         transition: 'all 0.15s',
                                         display: 'flex',
@@ -225,6 +230,34 @@ export const Select: React.FC<SelectProps> = ({
                                                 {option.engine}
                                             </div>
                                         )}
+                                        {option.actions?.map((action, i) => (
+                                            <div
+                                                key={i}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    action.onClick(e);
+                                                }}
+                                                title={action.tooltip}
+                                                style={{
+                                                    padding: '4px',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                    display: 'flex',
+                                                    color: 'var(--text-dim, #71717a)',
+                                                    transition: 'all 0.2s',
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.color = '#e4e4e7';
+                                                    e.currentTarget.style.background = 'rgba(255,255,255,0.1)';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.color = '#71717a';
+                                                    e.currentTarget.style.background = 'transparent';
+                                                }}
+                                            >
+                                                {action.icon}
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
                             )) : (
@@ -236,7 +269,7 @@ export const Select: React.FC<SelectProps> = ({
                     </motion.div>
                 )}
             </AnimatePresence>
-        </div>
+        </div >
     );
 };
 
