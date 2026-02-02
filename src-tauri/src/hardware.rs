@@ -246,6 +246,64 @@ pub async fn get_hardware_info_command() -> Result<HardwareInfo, String> {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, try nvidia-smi first
+        if let Ok(out) = Command::new("nvidia-smi")
+            .args(&[
+                "--query-gpu=name,memory.total",
+                "--format=csv,noheader,nounits",
+            ])
+            .output()
+        {
+            let s = String::from_utf8_lossy(&out.stdout);
+            for line in s.lines() {
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() >= 2 {
+                    let name = parts[0].trim().to_string();
+                    if let Ok(v_mb) = parts[1].trim().parse::<u64>() {
+                        let v_bytes = v_mb * 1024 * 1024;
+                        gpus.push(GpuInfo {
+                            name,
+                            vram_total: v_bytes,
+                        });
+                    }
+                }
+            }
+        }
+
+        // If no NVIDIA, maybe add lspci check for AMD/Intel labeling?
+        // But for now, Velox focuses on NVIDIA/Metal for training/inference
+        if gpus.is_empty() {
+            // Basic lspci check to at least show the name if possible
+            if let Ok(out) = Command::new("lspci").output() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                for line in s.lines() {
+                    let lower = line.to_lowercase();
+                    if (lower.contains("vga") || lower.contains("3d"))
+                        && (lower.contains("nvidia")
+                            || lower.contains("amd")
+                            || lower.contains("intel"))
+                    {
+                        // Simple extraction: take everything after the first colon
+                        // or just the whole line if parsing is hard
+                        let name = if let Some(idx) = line.find(':') {
+                            line[idx + 1..].trim().to_string()
+                        } else {
+                            line.to_string()
+                        };
+
+                        // We can't easily get VRAM from lspci, so set to 0 or leave it purely informational
+                        gpus.push(GpuInfo {
+                            name,
+                            vram_total: 0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // Sort GPUs by VRAM (highest first)
     gpus.sort_by(|a, b| b.vram_total.cmp(&a.vram_total));
 

@@ -2,42 +2,29 @@ import os
 import sys
 
 # ============================================================================
-# CRITICAL: Windows Multiprocessing Fix - MUST BE AT VERY TOP
-# ============================================================================
-# Disable tokenizers parallelism to prevent fork bombs on Windows
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-# Force single-process for datasets mapping on Windows
-os.environ["HF_DATASETS_DISABLE_CACHING"] = "1"
-
-import torch
-import json
-import argparse
-import logging
-import datasets
-import io
-
-# Ensure UTF-8 output for Windows and other systems
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8')
-if hasattr(sys.stderr, 'reconfigure'):
-    sys.stderr.reconfigure(encoding='utf-8')
-
 # ============================================================================
 # CRITICAL: Windows Multiprocessing Fix - MUST BE AT VERY TOP
 # ============================================================================
-# Disable tokenizers parallelism to prevent fork bombs on Windows
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-# Force single-process for datasets mapping on Windows
-os.environ["HF_DATASETS_DISABLE_CACHING"] = "1"
+if os.name == 'nt':
+    # Disable tokenizers parallelism to prevent fork bombs on Windows
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    # Force single-process for datasets mapping on Windows
+    os.environ["HF_DATASETS_DISABLE_CACHING"] = "1"
+    
+    # Prevent memory fragmentation - Critical for Windows/limited VRAM
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
+    
+    # DISBALE MULTIPROCESSING GLOBALLY FOR DATASETS ON WINDOWS
+    datasets.config.MAX_CORES = 1
+    datasets.config.IN_MEMORY_MAX_SIZE = 0 # Force disk-based if memory is tight
+else:
+    # Linux/Mac Setup
+    # Enable parallelism for better performance
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    # Allow caching
+    if "HF_DATASETS_DISABLE_CACHING" in os.environ:
+        del os.environ["HF_DATASETS_DISABLE_CACHING"]
 
-# Prevent memory fragmentation - Critical for Windows/limited VRAM
-# This allows PyTorch to use system RAM more effectively as a fallback for fragmentation
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
-
-# DISBALE MULTIPROCESSING GLOBALLY FOR DATASETS ON WINDOWS
-# This prevents "The paging file is too small for this operation to complete"
-datasets.config.MAX_CORES = 1
-datasets.config.IN_MEMORY_MAX_SIZE = 0 # Force disk-based if memory is tight
 datasets.disable_progress_bar()
 datasets.logging.set_verbosity_error() # Use error level to reduce sprawl logs
 

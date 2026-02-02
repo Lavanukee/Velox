@@ -4174,15 +4174,21 @@ pub async fn setup_python_env_command(
         }
     };
 
-    // 1. PyTorch (CUDA 12.4) - PINNED VERSIONS for Unsloth compatibility
+    // Define dependencies based on OS
+    let is_windows = cfg!(windows);
+
+    // 1. PyTorch
     // torch 2.6.0 + torchvision 0.21.0 are required for Unsloth-zoo's int1 dtype
+    // These WHLs are generally cross-platform (linux/win) at this index-url,
+    // but Linux might prefer the linux-specific index if needed.
+    // Usually download.pytorch.org/whl/cu124 works for both.
     run_pip(
         vec![
             "--upgrade",
             "--force-reinstall",
-            "torch==2.6.0+cu124",
-            "torchvision==0.21.0+cu124",
-            "torchaudio==2.6.0+cu124",
+            "torch==2.6.0", // Remove +cu124 from name to let index resolve, or keep specific? +cu124 is safer
+            "torchvision==0.21.0",
+            "torchaudio==2.6.0",
             "--index-url",
             "https://download.pytorch.org/whl/cu124",
         ],
@@ -4191,46 +4197,54 @@ pub async fn setup_python_env_command(
     )
     .await?;
 
-    // 2. Core Dependencies + Triton (for Windows)
-    // triton-windows 3.2.x is required for PyTorch 2.6 (3.3+ has breaking changes)
+    // 2. Core Dependencies
+    let mut core_deps = vec![
+        "--upgrade",
+        "cmake",
+        "setuptools",
+        "wheel",
+        "trl",
+        "peft",
+        "accelerate",
+        "bitsandbytes",
+        "tensorboard",
+        "huggingface_hub[hf_xet]",
+        "requests",
+        "uvicorn",
+        "fastapi",
+        "jinja2",
+        "python-multipart",
+        "gguf @ git+https://github.com/ggerganov/llama.cpp.git#subdirectory=gguf-py",
+    ];
+
+    if is_windows {
+        // triton-windows 3.2.x is required for PyTorch 2.6 on Windows
+        core_deps.push("triton-windows<3.3");
+    } else {
+        // Standard triton for Linux
+        core_deps.push("triton");
+    }
+
+    run_pip(core_deps, "Core Dependencies", 40).await?;
+
+    // 3. Unsloth
+    let unsloth_pkg = if is_windows {
+        "unsloth[windows] @ git+https://github.com/unslothai/unsloth.git"
+    } else {
+        "unsloth @ git+https://github.com/unslothai/unsloth.git"
+    };
+
+    run_pip(vec![unsloth_pkg], "Unsloth", 70).await?;
+
+    // 4. Reinstall PyTorch CUDA
+    // Unsloth might pull CPU versions on some systems, so we force reinstall GPU version just in case
     run_pip(
         vec![
             "--upgrade",
-            "cmake",
-            "setuptools",
-            "wheel",
-            "triton-windows<3.3",
-            "trl",
-            "peft",
-            "accelerate",
-            "bitsandbytes",
-            "tensorboard",
-            "huggingface_hub[hf_xet]",
-            "requests",
-            "uvicorn",
-            "fastapi",
-            "jinja2",
-            "python-multipart",
-            "gguf @ git+https://github.com/ggerganov/llama.cpp.git#subdirectory=gguf-py",
-        ],
-        "Core Dependencies",
-        40,
-    )
-    .await?;
-
-    // 3. Unsloth (Windows version)
-    run_pip(
-        vec!["unsloth[windows] @ git+https://github.com/unslothai/unsloth.git"],
-        "Unsloth",
-        70,
-    )
-    .await?;
-
-    // 4. Reinstall PyTorch CUDA (Unsloth may have pulled in CPU version)
-    run_pip(
-        vec![
-            "torch==2.6.0+cu124",
-            "torchvision==0.21.0+cu124",
+            "--force-reinstall",
+            "torch==2.6.0",
+            "torchvision==0.21.0",
+            "torchaudio==2.6.0",
             "--index-url",
             "https://download.pytorch.org/whl/cu124",
         ],

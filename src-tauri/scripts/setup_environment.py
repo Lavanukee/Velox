@@ -5,6 +5,7 @@ Follows strict installation order to avoid dependency conflicts.
 import sys
 import subprocess
 import os
+import platform
 
 def run_pip(args, description):
     """Run pip command and handle errors."""
@@ -58,11 +59,16 @@ def main():
     if not run_pip(["install"] + base_packages, "Installing base packages"):
         print("\n⚠️ Base packages installation failed. Continuing anyway...")
 
-    # Step 2: Install Triton separately with version constraint
-    # IMPORTANT: triton-windows 3.2.x is required for PyTorch 2.6 compatibility
-    # version 3.3+ has breaking changes with AttrsDescriptor
-    if not run_pip(["install", "-U", "triton-windows<3.3"], "Installing Triton"):
-        print("\n⚠️ Triton installation failed. Continuing anyway...")
+    # Step 2: Install Triton
+    # IMPORTANT: triton-windows is required for Windows, standard triton for Linux
+    if platform.system() == "Windows":
+        # version 3.3+ has breaking changes with AttrsDescriptor
+        if not run_pip(["install", "-U", "triton-windows<3.3"], "Installing Triton (Windows)"):
+            print("\n⚠️ Triton installation failed. Continuing anyway...")
+    else:
+        # Linux standard triton
+        if not run_pip(["install", "-U", "triton"], "Installing Triton (Linux)"):
+             print("\n⚠️ Triton installation failed. Continuing anyway...")
     
     # Step 3: Run setup_torch.py to install PyTorch with CUDA
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -73,12 +79,21 @@ def main():
         return False
     
     # Step 4: Install Unsloth
-    unsloth_packages = [
-        "unsloth[windows] @ git+https://github.com/unslothai/unsloth.git",
-        "unsloth-zoo"
-    ]
+    if platform.system() == "Windows":
+        unsloth_packages = [
+            "unsloth[windows] @ git+https://github.com/unslothai/unsloth.git",
+            "unsloth-zoo"
+        ]
+        install_msg = "Installing Unsloth (Windows)"
+    else:
+        # Linux installation - straightforward
+        unsloth_packages = [
+            "unsloth @ git+https://github.com/unslothai/unsloth.git",
+            "unsloth-zoo"
+        ]
+        install_msg = "Installing Unsloth (Linux)"
     
-    if not run_pip(["install"] + unsloth_packages, "Installing Unsloth"):
+    if not run_pip(["install"] + unsloth_packages, install_msg):
         print("\n⚠️ Unsloth installation failed. Continuing anyway...")
     
     # Step 5: CRITICAL - Reinstall PyTorch with CUDA (Unsloth may pull in CPU version)

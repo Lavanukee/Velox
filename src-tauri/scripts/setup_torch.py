@@ -19,17 +19,14 @@ def get_cuda_version():
     except:
         pass
     
-    # Fallback or default for 3090 Ti (Ampere) which supports 12.x
+    # Fallback
     return "121"
 
 def install_torch():
     print("Detecting hardware for PyTorch installation...")
     
     system = platform.system()
-    if system != "Windows":
-        print("This script is designed for Windows.")
-        return
-
+    
     # Check for NVIDIA GPU
     try:
         subprocess.check_call(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -42,32 +39,42 @@ def install_torch():
     if not has_gpu:
         print("Installing CPU-only PyTorch (Unsloth will NOT work)...")
         cmd = [sys.executable, "-m", "pip", "install", "torch", "torchvision", "torchaudio"]
+        # Add cpu logic for linux if different index needed? usually fine via pypi for pure cpu
+        if system == "Linux":
+             cmd.append("--index-url")
+             cmd.append("https://download.pytorch.org/whl/cpu")
     else:
         cuda_version = get_cuda_version()
         print(f"Targeting CUDA version: {cuda_version}")
         
         # IMPORTANT: Pin specific versions for Unsloth compatibility
         # torch 2.6.0 + torchvision 0.21.0 + torchaudio 2.6.0 are verified compatible
-        # Using CUDA 12.4 as it has the best package availability for torch 2.6
         
-        # Override detected version to 124 for torch 2.6 compatibility
-        cuda_version = "124"  # Force cu124 for torch 2.6.x availability
+        # Override detected version to 124 for torch 2.6 compatibility if on Windows (or Linux generally)
+        cuda_version = "124" 
+        
+        # Linux and Windows have slightly different index URLs sometimes, 
+        # but for PyTorch WHL they are consistent: https://download.pytorch.org/whl/cu124
         index_url = f"https://download.pytorch.org/whl/cu{cuda_version}"
         
         # Pin versions to avoid version mismatch between torch and torchvision
-        # torch 2.6.0 is required for Unsloth-zoo's int1 dtype support
         torch_version = "2.6.0"
         torchvision_version = "0.21.0"
         torchaudio_version = "2.6.0"
         
-        print(f"Installing PyTorch {torch_version} with CUDA {cuda_version} support...")
+        if system == "Linux":
+             # Linux specific version string? Usually just same.
+             print(f"Installing PyTorch {torch_version} with CUDA {cuda_version} support (Linux)...")
+        else:
+             print(f"Installing PyTorch {torch_version} with CUDA {cuda_version} support (Windows)...")
+             
         print("(Pinned versions for Unsloth compatibility)")
         cmd = [
             sys.executable, "-m", "pip", "install", 
             "--upgrade", "--force-reinstall",
-            f"torch=={torch_version}+cu{cuda_version}",
-            f"torchvision=={torchvision_version}+cu{cuda_version}",
-            f"torchaudio=={torchaudio_version}+cu{cuda_version}",
+            f"torch=={torch_version}", # +cu not always needed in package name if index-url is set correctly, but harmless
+            f"torchvision=={torchvision_version}",
+            f"torchaudio=={torchaudio_version}",
             "perceptron", # Required for Isaac models
             "--index-url", index_url
         ]

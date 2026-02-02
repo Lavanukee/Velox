@@ -50,7 +50,8 @@ pub fn get_python_command(app_handle: &tauri::AppHandle) -> Result<(String, Path
             .to_string();
 
         // Windows specific path fix
-        if cfg!(windows) && python_exe.starts_with(r"\\?\") {
+        #[cfg(target_os = "windows")]
+        if python_exe.starts_with(r"\\?\") {
             python_exe = python_exe[4..].to_string();
         }
 
