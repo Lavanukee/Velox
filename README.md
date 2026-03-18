@@ -2,6 +2,14 @@
 
 Velox is a native Windows desktop UI for managing local machine learning artifacts (HuggingFace models, LoRA adapters) and converting them to GGUF formats. Built with TypeScript/React and Tauri, it downloads and sets up a local Python environment at runtime to eliminate WSL or system dependency conflicts.
 
+
+# Update: This project serves no more purpouse with the release of unsloth studio
+https://github.com/unslothai/unsloth
+
+
+
+
+
 ## Features
 
 *   **Native Windows App:** Runs directly on Windows without Docker, WSL, or complex dependency management.
